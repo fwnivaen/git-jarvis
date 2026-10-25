@@ -27,7 +27,7 @@ The implementation is a useful local voice/Island slice of the attached vision. 
 | Baseline Python regression | 268 run, 32 skipped, 0 failures | Before isolated changes. |
 | Approved full preflight against original running server | 14 pass, 0 fail, 2 warn | The warnings are expected API-provider skips for the active Codex route. It made model calls and created/recalled/cleaned one temporary note. Original Git status remained clean. |
 | New native `swiftc` build and ad hoc signature | Passed with no compiler warnings | Not activated as the normal voice helper. |
-| Island state checks | 299 passed | Pairwise active/error transitions, work priority, queue expiry and UTF-16 mappings; no live window timing proof. |
+| Island state checks | 303 passed | Pairwise active/error transitions, passive work priority, queue expiry and UTF-16 mappings; no live window timing proof. |
 | App `--check-island` | Passed | Compiles the Metal shader at runtime; does not prove every live transition. |
 | Static snapshots | 30 images, notch and flat pill | [Notch speaking](screenshots/island/notch-speaking.png) and [flat pill listening](screenshots/island/pill-listening.png); static captures omit live Metal and any Core Animation effects. |
 | Cross-language microphone lock | Python-held lock blocked the Swift app; release restored access | Tested in the isolated build. Running server still has its original module loaded. |

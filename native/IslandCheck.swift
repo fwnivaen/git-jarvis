@@ -94,14 +94,22 @@ enum IslandCheck {
 
         var work = IslandState()
         work.setBackgroundWork(true)
-        work.setApproval("Review")
         check(work.resolve(at: start).phase == .working, "verified background work is active")
+        work.setApproval("Review")
+        check(work.resolve(at: start).phase == .approval, "approval interrupts passive work")
         work.begin(.listening, title: "Listening")
         check(work.resolve(at: start).phase == .listening, "voice session takes priority over work")
         work.end(.status, text: "", at: start)
-        check(work.resolve(at: start).phase == .working, "work reappears after voice")
+        check(work.resolve(at: start).phase == .approval, "approval reappears after voice")
+        work.setApproval(nil)
+        check(work.resolve(at: start).phase == .working, "work reappears after approval")
+        work.show(.error, title: "Failed", at: start)
+        check(work.resolve(at: start).phase == .error, "voice error interrupts passive work")
+        check(work.resolve(at: start.addingTimeInterval(4.1)).phase == .working,
+              "passive work resumes after error")
         work.setBackgroundWork(false)
-        check(work.resolve(at: start).phase == .approval, "approval reappears after work")
+        check(work.resolve(at: start.addingTimeInterval(4.1)).phase == .hidden,
+              "idle follows finished background work")
 
         print("Island state checks: \(checks) passed")
     }

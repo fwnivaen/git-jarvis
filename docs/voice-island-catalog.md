@@ -21,7 +21,7 @@ Statuses describe this worktree and observed running system. **Verified working*
 | On-device `SpeechTranscriber` | Partial | Small; model install and live audio acceptance | Installed OS supports it; model not installed. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
 | Legacy on-device speech fallback | Partial | Small; physical mic acceptance | New app requires `supportsOnDeviceRecognition`; not physically exercised. |
 | British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation. |
-| Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 299 state checks, 30 static snapshots, runtime Metal check; [report](voice-island-report.md). |
+| Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check; [report](voice-island-report.md). |
 | Live approval Island source | Missing | Medium; general approval engine | View state exists, live approval source does not. |
 | Workflow background completion announcements | Partial | Small; live transition and presence testing | Existing `/workflows` polling, three/thirty-second intervals; spoken summaries are opt-in. |
 | Microphone ownership across updated helpers | Partial | Small; integrated activation | Cross-language exclusion test passed; running server not updated. |

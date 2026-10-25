@@ -123,10 +123,6 @@ struct IslandState {
             return IslandDisplay(phase: phase, title: activeTitle, detail: activeDetail,
                                  wordIndex: activeWord, microphoneLevel: microphoneLevel)
         }
-        if let backgroundWorkTitle {
-            return IslandDisplay(phase: .working, title: "Working", detail: backgroundWorkTitle,
-                                 wordIndex: nil, microphoneLevel: 0)
-        }
         if let approvalTitle {
             return IslandDisplay(phase: .approval, title: "Review ↗", detail: approvalTitle,
                                  wordIndex: nil, microphoneLevel: 0)
@@ -139,6 +135,10 @@ struct IslandState {
             setTransient(.notification, title: "Jarvis", detail: first.title,
                          duration: Self.notificationDuration, at: now)
             return transient!
+        }
+        if let backgroundWorkTitle {
+            return IslandDisplay(phase: .working, title: "Working", detail: backgroundWorkTitle,
+                                 wordIndex: nil, microphoneLevel: 0)
         }
         return IslandDisplay(phase: readyEnabled ? .ready : .hidden, title: "Jarvis",
                              detail: "", wordIndex: nil, microphoneLevel: 0)
