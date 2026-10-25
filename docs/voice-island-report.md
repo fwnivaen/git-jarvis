@@ -35,7 +35,7 @@ The implementation is a useful local voice/Island slice of the attached vision. 
 | Changed-branch regression suite | 271 Python tests run, 39 skipped, 0 failures; all 12 JavaScript test files passed | Skips reflect private config and optional packages deliberately absent from the isolated worktree. |
 | Changed-branch repository check | 262 tracked files, 206 local links, 0 failures | Run after staging the new source files. |
 
-The full changed-branch Python and source hygiene checks are recorded in the final change review. No physical microphone, speaker, speech recognition, external display, full-screen/Spaces, Stage Manager, VoiceOver, screen-share exclusion, click-through, or cold-start latency acceptance was performed. CPU targets of 3% compact and 5% speaking remain unmeasured because the replacement app was not activated. The bundle uses ad hoc signing; a stable signing identity and login startup need a later approved activation step. No wake word or continuous microphone listener is enabled.
+The full changed-branch Python and source hygiene checks are recorded in the final change review. No physical microphone, speaker, speech recognition, external display, full-screen/Spaces, Stage Manager, VoiceOver, screen-share exclusion, click-through, or cold-start latency acceptance was performed. CPU targets of 3% compact and 5% speaking remain unmeasured because the replacement app was not activated. The bundle uses ad hoc signing; `security find-identity` found zero valid code-signing identities on this Mac. Stable signing would need an identity supplied later, and login startup needs a separate approved activation step. No wake word or continuous microphone listener is enabled.
 
 ## Identity and privacy audit
 
