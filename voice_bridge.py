@@ -1,8 +1,11 @@
 """Mac-only speech bridge. Audio stays in the native helper; Python uses stdlib."""
 import atexit
+import fcntl
 import json
 import math
+import os
 import secrets
+import stat
 import subprocess
 import tempfile
 import threading
@@ -24,11 +27,45 @@ AUDIO_SPECTRUM_BANDS = 24
 AUDIO_RATE_HZ = 22050
 AUDIO_PRIVATE_MODE = 0o600
 AUDIO_DEVICE_ID_CHARS = 256
+VOICE_LOCK_PATH = Path(tempfile.gettempdir()) / f'jarvis-voice-owner-{os.getuid()}.lock'
 LOCK = threading.RLock()
 SESSION = None
 AUDIO_LOCK = threading.RLock()
 AUDIO = {}
 AUDIO_SLOTS = threading.BoundedSemaphore(AUDIO_MAX_SESSIONS)
+
+
+def acquire_voice_lock(path=VOICE_LOCK_PATH):
+    """One microphone owner across the browser bridge and the desktop helper."""
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            os.close(fd)
+            return None
+        os.fchmod(fd, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
+    except OSError:
+        return None
+
+
+def release_voice_lock(fd):
+    if fd is not None:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _release_after_exit(process, fd):
+    # Keep the cross-process lock while the native helper is still alive.
+    try:
+        process.wait()
+    finally:
+        release_voice_lock(fd)
 
 
 def _expire_audio():
@@ -124,8 +161,12 @@ def stop():
         try:
             state['process'].wait(timeout=STOP_WAIT_S)
         except subprocess.TimeoutExpired:
-            # The helper also exits when its heartbeat disappears.
-            pass
+            # The helper exits when its heartbeat disappears. Retain the lock
+            # until that actually happens, even if this HTTP request returns.
+            threading.Thread(target=_release_after_exit,
+                             args=(state['process'], state['voice_lock']), daemon=True).start()
+        else:
+            release_voice_lock(state['voice_lock'])
         state['scratch'].cleanup()
 
 
@@ -139,10 +180,17 @@ def handle(action, token=None, device_id=None):
                 return {'status': 'error', 'text': 'The Mac voice helper needs to be built. Run native/build_voice.sh in the Jarvis folder.'}
             if SESSION:
                 return {'status': 'error', 'text': 'Another Jarvis tab is using the Mac microphone. Turn its Mic off first.'}
-            scratch = tempfile.TemporaryDirectory(prefix='jarvis-voice-')
-            folder = Path(scratch.name)
-            (folder / 'heartbeat').touch()
+            voice_lock = acquire_voice_lock()
+            if voice_lock is None:
+                return {'status': 'error', 'text': 'Another Jarvis voice session is using the microphone.'}
             try:
+                scratch = tempfile.TemporaryDirectory(prefix='jarvis-voice-')
+            except OSError:
+                release_voice_lock(voice_lock)
+                return {'status': 'error', 'text': 'The Mac voice helper could not prepare a private session.'}
+            folder = Path(scratch.name)
+            try:
+                (folder / 'heartbeat').touch()
                 arguments = ['/usr/bin/open', '-n', '-W', str(APP), '--args', '--session', str(folder)]
                 if isinstance(device_id, str) and device_id:
                     arguments += ['--device', device_id]
@@ -150,9 +198,11 @@ def handle(action, token=None, device_id=None):
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError:
                 scratch.cleanup()
+                release_voice_lock(voice_lock)
                 return {'status': 'error', 'text': 'The Mac voice helper could not start.'}
             token = secrets.token_hex(SESSION_TOKEN_BYTES)
-            SESSION = dict(token=token, scratch=scratch, process=process, touched=time.monotonic())
+            SESSION = dict(token=token, scratch=scratch, process=process,
+                           voice_lock=voice_lock, touched=time.monotonic())
             return {'token': token, 'status': 'starting'}
         if not SESSION or not isinstance(token, str) or not secrets.compare_digest(token, SESSION['token']):
             return {'status': 'error', 'text': 'The microphone session ended. Click Mic to retry.'}

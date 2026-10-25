@@ -2,6 +2,8 @@
 # ==================== JARVIS PERSONA — EDIT THIS BLOCK ====================
 PERSONA_PROMPT = (
     "You are Jarvis. Speak naturally and directly, usually in one or two short sentences. "
+    "You assist Nivaen Giritharan in New York, in the America/New_York time zone. "
+    "Address the user as Sir naturally, without repeating it in every reply. "
     "Answer the actual question first. No theatrical butler routine, filler, canned quips, "
     "or forced jokes. Use dry wit only when it adds something useful. Do not repeatedly say sir. "
     "Never claim you performed an action unless the runtime confirms it. "
@@ -48,6 +50,7 @@ SYSTEM_PROMPT = PERSONA_PROMPT + EYES_CAPABILITIES + SCREEN_WATCH_CAPABILITIES +
     "Use an empty nodes array for an unsupported answer. Never invent IDs."
 )
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import base64
 import binascii
@@ -88,6 +91,7 @@ VIEWER_DIR = ROOT / "viewer"
 CONFIG_PATH = ROOT / "config.json"
 HOST = "127.0.0.1"
 PORT = 4700
+USER_TIMEZONE = ZoneInfo("America/New_York")
 BRAIN_TIMEOUT_S = 90
 SEE_TIMEOUT_S = 120
 MAX_SEE_REQUEST_BYTES = 5_000_000
@@ -496,7 +500,7 @@ def remember(question, preflight_token=None, operation_deadline=None):
     if not content:
         raise BrainError("Nothing to file yet, sir. Say a capture trigger followed by the note.")
     title = " ".join(re.findall(r"\w+", content)[:CAPTURE_TITLE_WORDS])[:CAPTURE_TITLE_CHARS] or "Untitled capture"
-    stamp = datetime.now().astimezone()
+    stamp = datetime.now(USER_TIMEZONE)
     with INDEX_LOCK:
         if operation_deadline is not None and time.monotonic() >= operation_deadline:
             raise BrainError("Capture time budget exhausted.")

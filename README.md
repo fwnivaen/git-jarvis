@@ -90,3 +90,7 @@ Max-effort workers can reach the 45-second limit; the system returns an explicit
 | Regression checks | [tests/](tests/), [CI workflow](.github/workflows/ci.yml) |
 
 [Architecture](docs/ARCHITECTURE.md) · [Usage](docs/USAGE.md) · [Documentation index](docs/README.md) · [Third-party notices](THIRD_PARTY.md)
+
+## Isolated native voice and Island work
+
+The `codex/jarvis-voice-island` branch adds a native menu-bar conversation app and Jarvis Island in a separate worktree. It has been built and checked without replacing the running assistant. The [current implementation record](docs/voice-island-report.md) distinguishes automated proof from Mac acceptance still needed, and the [feature catalog](docs/voice-island-catalog.md) tracks the larger voice-first roadmap. Normal activation, startup registration, merge and push await review.

@@ -6,6 +6,8 @@
 | [Ultra Jarvis guide](../ULTRA-JARVIS.md) | Complete setup, model profiles, flags, tools, imports and recovery commands |
 | [Agent workflows](WORKFLOWS.md) | Launch, monitor, cancel and recover LangGraph work inside JARVIS |
 | [Galaxy agent visuals](agent-visuals.md) | Compact three-agent signals, state mapping, screenshots and visual test instructions |
+| [Voice and Island report](voice-island-report.md) | Current isolated native build, reconciliation, checks and activation limits |
+| [Voice feature catalog](voice-island-catalog.md) | Requirement status, dependencies and roadmap |
 | [Framework evaluation](framework-evaluation.md) | Source inspection, selection, baseline, live trials and bounded stress results |
 | [Remote execution investigation](remote-execution-recommendation.md) | Code-grounded feasibility, remote computers/live viewing, candidate comparison, costs and a proposed proof of concept |
 | [Execution upgrade results](upgrade-results.md) | Implemented versus verified capabilities, measurements and precise remaining gates |
