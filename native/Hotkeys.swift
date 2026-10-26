@@ -51,17 +51,21 @@ final class Hotkeys {
     }
 
     func checkEventHandler() -> OSStatus {
-        var event: EventRef?
-        let created = CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed),
-                                  GetCurrentEventTime(), 0, &event)
-        guard created == noErr, let event else { return created }
-        defer { ReleaseEvent(event) }
-        var identifier = EventHotKeyID(signature: Self.signature, id: Self.pushToTalk)
-        let parameter = SetEventParameter(event, UInt32(kEventParamDirectObject),
-                                          UInt32(typeEventHotKeyID),
-                                          MemoryLayout<EventHotKeyID>.size, &identifier)
-        guard parameter == noErr else { return parameter }
-        return SendEventToEventTarget(event, GetApplicationEventTarget())
+        func send(_ kind: UInt32) -> OSStatus {
+            var event: EventRef?
+            let created = CreateEvent(nil, OSType(kEventClassKeyboard), kind,
+                                      GetCurrentEventTime(), 0, &event)
+            guard created == noErr, let event else { return created }
+            defer { ReleaseEvent(event) }
+            var identifier = EventHotKeyID(signature: Self.signature, id: Self.pushToTalk)
+            let parameter = SetEventParameter(event, UInt32(kEventParamDirectObject),
+                                              UInt32(typeEventHotKeyID),
+                                              MemoryLayout<EventHotKeyID>.size, &identifier)
+            guard parameter == noErr else { return parameter }
+            return SendEventToEventTarget(event, GetApplicationEventTarget())
+        }
+        let pressed = send(UInt32(kEventHotKeyPressed))
+        return pressed == noErr ? send(UInt32(kEventHotKeyReleased)) : pressed
     }
 
     @discardableResult
