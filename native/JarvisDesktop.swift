@@ -234,6 +234,11 @@ enum JarvisDesktop {
             print("Microphone: \(VoicePermissions.microphone); Speech: \(VoicePermissions.speech)")
             return
         }
+        if arguments.first == "--check-speech-capability" {
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
+            print("English recognizer available: \(recognizer?.isAvailable == true); on-device recognition: \(recognizer?.supportsOnDeviceRecognition == true)")
+            return
+        }
         if arguments.first == "--measure-mic" {
             exit(MicrophoneCheck.run())
         }

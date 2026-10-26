@@ -19,7 +19,7 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Focus retirement | Verified working | None | `/focus` 404 and existing removal tests. |
 | Native menu-bar push-to-talk | Partial | Small; physical key, permission and recognition checks on Mac | New desktop app launched and exited; microphone buffer latency measured, exclusive shortcut and handler checked, menu capture fallback added, speech permission still unrequested. |
 | On-device `SpeechTranscriber` | Partial | Small; model install and live audio acceptance | Installed OS supports it; model not installed. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
-| Legacy on-device speech fallback | Partial | Small; end-to-end recognition acceptance | New app requires `supportsOnDeviceRecognition`; physical audio input was measured separately. |
+| Legacy on-device speech fallback | Partial | Small; end-to-end recognition acceptance | English recognizer reports available and on-device support; physical audio input was measured separately. |
 | British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation; `--ask` exited normally after a local request. |
 | Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check, live flat-pill geometry/focus and visual CPU; [report](voice-island-report.md). |
 | Live approval Island source | Missing | Medium; general approval engine | View state exists, live approval source does not. |
