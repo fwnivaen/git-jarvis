@@ -94,6 +94,8 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             if !keys.isPushToTalkAvailable {
                 island.show(.error, title: "Push-to-talk shortcut unavailable",
                             detail: "Check for another app using Control–Shift–Space")
+            } else {
+                island.notice("Jarvis voice is ready")
             }
         case .ask(let question):
             askStarted = true
@@ -239,10 +241,14 @@ enum JarvisDesktop {
             let app = NSApplication.shared
             app.setActivationPolicy(.accessory)
             let keys = Hotkeys()
-            print("Push-to-talk registered: \(keys.isPushToTalkAvailable)")
+            print("Push-to-talk registered: \(keys.isPushToTalkAvailable); status: \(keys.pushToTalkStatus)")
             keys.pressed = { id in print("Hotkey pressed: \(id)"); fflush(stdout) }
             keys.released = { id in print("Hotkey released: \(id)"); fflush(stdout) }
             fflush(stdout)
+            if arguments.dropFirst().first == "--self-event" {
+                print("Handler self-event status: \(keys.checkEventHandler())")
+                fflush(stdout)
+            }
             Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in app.terminate(nil) }
             app.run()
             withExtendedLifetime(keys) {}

@@ -13,6 +13,7 @@ final class Hotkeys {
     private var handler: EventHandlerRef?
     private var registrations: [UInt32: EventHotKeyRef] = [:]
     var isPushToTalkAvailable: Bool { registrations[Self.pushToTalk] != nil }
+    private(set) var pushToTalkStatus: OSStatus = OSStatus(eventNotHandledErr)
 
     init() {
         var types = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
@@ -32,7 +33,9 @@ final class Hotkeys {
         let installed = InstallEventHandler(GetApplicationEventTarget(), callback, types.count, &types,
                                             Unmanaged.passUnretained(self).toOpaque(), &handler)
         guard installed == noErr else { return }
-        register(Self.pushToTalk, key: UInt32(kVK_Space), modifiers: UInt32(controlKey | shiftKey))
+        pushToTalkStatus = register(Self.pushToTalk, key: UInt32(kVK_Space),
+                                    modifiers: UInt32(controlKey | shiftKey),
+                                    options: OptionBits(kEventHotKeyExclusive))
         register(Self.cancel, key: UInt32(kVK_Escape), modifiers: UInt32(optionKey))
         register(Self.mute, key: UInt32(kVK_ANSI_M), modifiers: UInt32(optionKey | cmdKey))
     }
@@ -47,12 +50,30 @@ final class Hotkeys {
         else if let item = registrations.removeValue(forKey: Self.plainEscape) { UnregisterEventHotKey(item) }
     }
 
-    private func register(_ id: UInt32, key: UInt32, modifiers: UInt32) {
-        guard handler != nil, registrations[id] == nil else { return }
+    func checkEventHandler() -> OSStatus {
+        var event: EventRef?
+        let created = CreateEvent(nil, OSType(kEventClassKeyboard), UInt32(kEventHotKeyPressed),
+                                  GetCurrentEventTime(), 0, &event)
+        guard created == noErr, let event else { return created }
+        defer { ReleaseEvent(event) }
+        var identifier = EventHotKeyID(signature: Self.signature, id: Self.pushToTalk)
+        let parameter = SetEventParameter(event, UInt32(kEventParamDirectObject),
+                                          UInt32(typeEventHotKeyID),
+                                          MemoryLayout<EventHotKeyID>.size, &identifier)
+        guard parameter == noErr else { return parameter }
+        return SendEventToEventTarget(event, GetApplicationEventTarget())
+    }
+
+    @discardableResult
+    private func register(_ id: UInt32, key: UInt32, modifiers: UInt32,
+                          options: OptionBits = 0) -> OSStatus {
+        guard handler != nil else { return OSStatus(eventNotHandledErr) }
+        guard registrations[id] == nil else { return noErr }
         var reference: EventHotKeyRef?
         let result = RegisterEventHotKey(key, modifiers,
                                          EventHotKeyID(signature: Self.signature, id: id),
-                                         GetApplicationEventTarget(), 0, &reference)
+                                         GetApplicationEventTarget(), options, &reference)
         if result == noErr, let reference { registrations[id] = reference }
+        return result
     }
 }
