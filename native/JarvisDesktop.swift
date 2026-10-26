@@ -36,6 +36,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     private var conversation: Conversation!
     private var hotkeys: Hotkeys?
     private var statusItem: NSStatusItem?
+    private var listenItem: NSMenuItem?
     private var muteItem: NSMenuItem?
     private var backgroundSpeechItem: NSMenuItem?
     private var islandItem: NSMenuItem?
@@ -52,6 +53,11 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             let active = phase != .idle && phase != .preparing
             self.hotkeys?.borrowPlainEscape(active)
+            if let listenItem = self.listenItem {
+                let listening = phase == .preparing || phase == .capturing
+                listenItem.title = listening ? "Finish listening" : "Start listening"
+                listenItem.isEnabled = listening || phase == .idle
+            }
             self.muteItem?.title = self.conversation.muted ? "Unmute replies" : "Mute replies"
             if case .ask = self.mode, self.askStarted, phase == .idle {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { NSApp.terminate(nil) }
@@ -108,6 +114,10 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         status.button?.title = "✦"
         status.button?.toolTip = "Jarvis · Hold Control–Shift–Space to talk"
         let menu = NSMenu()
+        let listen = NSMenuItem(title: "Start listening", action: #selector(toggleListening), keyEquivalent: "")
+        listen.target = self
+        menu.addItem(listen)
+        listenItem = listen
         let ask = NSMenuItem(title: "Ask Jarvis…", action: #selector(askFromMenu), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
@@ -154,6 +164,18 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "Ask")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn { conversation.ask(field.stringValue) }
+    }
+
+    @objc private func toggleListening() {
+        switch conversation.phase {
+        case .idle:
+            ReadySound.play()
+            conversation.pressToTalk()
+        case .preparing, .capturing:
+            conversation.releaseToTalk()
+        case .finishing, .thinking, .speaking, .mutedReply:
+            break
+        }
     }
 
     @objc private func toggleMute() { conversation.toggleMute() }
