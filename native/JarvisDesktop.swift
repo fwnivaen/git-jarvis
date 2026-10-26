@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import Foundation
 import MetalKit
+import OSLog
 import Speech
 
 enum VoicePermissions {
@@ -31,6 +32,7 @@ enum LaunchMode {
 }
 
 final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
+    private let diagnostics = Logger(subsystem: "local.fwnivaen.jarvis.desktop", category: "voice")
     private let mode: LaunchMode
     private let island = IslandController()
     private var conversation: Conversation!
@@ -78,6 +80,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             let keys = Hotkeys()
             keys.pressed = { [weak self] id in
                 guard let self else { return }
+                self.diagnostics.notice("Hotkey pressed: \(id, privacy: .public)")
                 switch id {
                 case Hotkeys.pushToTalk:
                     ReadySound.play()
@@ -88,15 +91,18 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             keys.released = { [weak self] id in
+                self?.diagnostics.notice("Hotkey released: \(id, privacy: .public)")
                 if id == Hotkeys.pushToTalk { self?.conversation.releaseToTalk() }
             }
             hotkeys = keys
+            diagnostics.notice("Push-to-talk registration status: \(keys.pushToTalkStatus, privacy: .public)")
             if !keys.isPushToTalkAvailable {
                 island.show(.error, title: "Push-to-talk shortcut unavailable",
                             detail: "Check for another app using Control–Shift–Space")
             } else {
                 island.notice("Jarvis voice is ready")
             }
+            diagnostics.notice("Speech authorization status at launch: \(SFSpeechRecognizer.authorizationStatus().rawValue, privacy: .public)")
         case .ask(let question):
             askStarted = true
             conversation.ask(question)
@@ -237,6 +243,47 @@ enum JarvisDesktop {
         if arguments.first == "--check-speech-capability" {
             let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
             print("English recognizer available: \(recognizer?.isAvailable == true); on-device recognition: \(recognizer?.supportsOnDeviceRecognition == true)")
+            return
+        }
+        if arguments.first == "--install-speech-model" {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                do {
+                    guard SpeechTranscriber.isAvailable else {
+                        fputs("Enhanced English speech is unavailable on this Mac\n", stderr)
+                        exit(1)
+                    }
+                    let module = SpeechTranscriber(locale: Locale(identifier: "en-US"),
+                                                   preset: .progressiveTranscription)
+                    let status = await AssetInventory.status(forModules: [module])
+                    print("Enhanced English model status: \(status)")
+                    if status == .installed {
+                        print("Enhanced English speech model already installed")
+                        app.terminate(nil)
+                        return
+                    }
+                    guard status != .unsupported else {
+                        fputs("Enhanced English speech model unavailable\n", stderr)
+                        exit(1)
+                    }
+                    guard let request = try await AssetInventory.assetInstallationRequest(
+                        supporting: [module]) else {
+                        print("No model download needed; checking installed status")
+                        app.terminate(nil)
+                        return
+                    }
+                    print("Downloading Apple on-device English speech model")
+                    fflush(stdout)
+                    try await request.downloadAndInstall()
+                    print("Enhanced English speech model installed")
+                    app.terminate(nil)
+                } catch {
+                    fputs("Enhanced English speech model installation failed\n", stderr)
+                    exit(1)
+                }
+            }
+            app.run()
             return
         }
         if arguments.first == "--measure-mic" {

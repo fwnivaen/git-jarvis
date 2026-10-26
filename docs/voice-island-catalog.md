@@ -17,8 +17,8 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Screen snapshots and explicit vision | Partial | Medium; physical permission acceptance | Existing Eyes/Watch routes and tests; [architecture](ARCHITECTURE.md). |
 | Word document export | Partial | Small; live import/export acceptance | Existing document tools; [Ultra guide](../ULTRA-JARVIS.md). |
 | Focus retirement | Verified working | None | `/focus` 404 and existing removal tests. |
-| Native menu-bar push-to-talk | Partial | Small; physical key, permission and recognition checks on Mac | New desktop app launched and exited; microphone buffer latency measured, exclusive shortcut and handler checked, menu capture fallback added, speech permission still unrequested. |
-| On-device `SpeechTranscriber` | Partial | Small; model install and live audio acceptance | Installed OS supports it; model not installed. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
+| Native menu-bar push-to-talk | Partial | Small; physical key and recognition check on Mac | Latest desktop app is temporarily running; microphone buffer latency measured, exclusive shortcut and handler checked. Physical key delivery is not yet verified. |
+| On-device `SpeechTranscriber` | Partial | Small; live audio acceptance | The current build reports the English model installed; the modern path runs before legacy speech authorization. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
 | Legacy on-device speech fallback | Partial | Small; end-to-end recognition acceptance | English recognizer reports available and on-device support; physical audio input was measured separately. |
 | British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation; `--ask` exited normally after a local request. |
 | Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check, live flat-pill geometry/focus and visual CPU; [report](voice-island-report.md). |
@@ -42,7 +42,7 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Controlled workers and failure drills | Partial | Medium; broader live acceptance | Existing bounded workers and fixture drills; [upgrade checklist](upgrade-checklist.md). |
 | Per-task memory and long-task continuity | Partial | Medium; privacy and recovery policy | Existing checkpoints/preferences; not joined into one task model. |
 | New York timezone | Verified working | Maintenance | `ZoneInfo` winter/summer test and source audit. |
-| First-run permissions and export | Partial | Medium; live acceptance | Native usage descriptions and read-only permission check present; guided first-run and complete export absent. |
+| First-run permissions and export | Partial | Medium; live acceptance | Native usage descriptions and read-only permission check present; modern on-device speech avoids the legacy recognition prompt. Guided first-run and complete export absent. |
 | Local research, Mac tools and documents | Partial | Large; one permissioned tool at a time | Existing notes/tools/vision/doc support; other actions require scope review. |
 | Communications, meetings, iPhone, other devices, home | Missing | Large; accounts, permissions and user choices | No new integrations authorized or installed. |
 

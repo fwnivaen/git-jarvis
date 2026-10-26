@@ -92,7 +92,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
             DispatchQueue.main.async {
                 guard let self, self.generation == current else { return }
                 guard allowed else { self.fail(.permissionDenied, "Allow microphone access in System Settings"); return }
-                self.authorizeSpeech(current)
+                self.startCapture(current)
             }
         }
     }
@@ -110,7 +110,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                     self.fail(.permissionDenied, "Allow speech recognition in System Settings")
                     return
                 }
-                self.startCapture(current)
+                self.startLegacyCapture(current)
             }
         }
     }
@@ -161,7 +161,8 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                     // the existing on-device recognizer for this turn.
                 }
             }
-            self.startLegacyCapture(current)
+            guard self.generation == current, self.phase == .preparing, self.buttonHeld else { return }
+            self.authorizeSpeech(current)
         }
     }
 
