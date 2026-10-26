@@ -1,4 +1,4 @@
-# Jarvis feature catalog and roadmap — 2026-10-25
+# Jarvis feature catalog and roadmap — 2026-10-26
 
 Statuses describe this worktree and observed running system. **Verified working** means exercised locally; **partial** means a real implementation exists with an open acceptance or integration gate; **missing** means no implementation was found; **blocked** means external access, a supplied detail or explicit activation is required. Effort is a rough order-of-magnitude estimate for the next meaningful slice, not a commitment.
 
@@ -17,11 +17,11 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Screen snapshots and explicit vision | Partial | Medium; physical permission acceptance | Existing Eyes/Watch routes and tests; [architecture](ARCHITECTURE.md). |
 | Word document export | Partial | Small; live import/export acceptance | Existing document tools; [Ultra guide](../ULTRA-JARVIS.md). |
 | Focus retirement | Verified working | None | `/focus` 404 and existing removal tests. |
-| Native menu-bar push-to-talk | Partial | Small; permission, speech and latency checks on Mac | New desktop app builds; no normal launch yet. |
+| Native menu-bar push-to-talk | Partial | Small; physical key, permission and recognition checks on Mac | New desktop app launched and exited; microphone buffer latency measured, shortcut registered, speech permission still unrequested. |
 | On-device `SpeechTranscriber` | Partial | Small; model install and live audio acceptance | Installed OS supports it; model not installed. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
-| Legacy on-device speech fallback | Partial | Small; physical mic acceptance | New app requires `supportsOnDeviceRecognition`; not physically exercised. |
-| British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation. |
-| Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check; [report](voice-island-report.md). |
+| Legacy on-device speech fallback | Partial | Small; end-to-end recognition acceptance | New app requires `supportsOnDeviceRecognition`; physical audio input was measured separately. |
+| British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation; `--ask` exited normally after a local request. |
+| Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check, live flat-pill geometry/focus and visual CPU; [report](voice-island-report.md). |
 | Live approval Island source | Missing | Medium; general approval engine | View state exists, live approval source does not. |
 | Workflow background completion announcements | Partial | Small; live transition and presence testing | Existing `/workflows` polling, three/thirty-second intervals; spoken summaries are opt-in. |
 | Microphone ownership across updated helpers | Partial | Small; integrated activation | Cross-language exclusion test passed; running server not updated. |
@@ -42,7 +42,7 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Controlled workers and failure drills | Partial | Medium; broader live acceptance | Existing bounded workers and fixture drills; [upgrade checklist](upgrade-checklist.md). |
 | Per-task memory and long-task continuity | Partial | Medium; privacy and recovery policy | Existing checkpoints/preferences; not joined into one task model. |
 | New York timezone | Verified working | Maintenance | `ZoneInfo` winter/summer test and source audit. |
-| First-run permissions and export | Partial | Medium; live acceptance | Native usage descriptions present; guided first-run and complete export absent. |
+| First-run permissions and export | Partial | Medium; live acceptance | Native usage descriptions and read-only permission check present; guided first-run and complete export absent. |
 | Local research, Mac tools and documents | Partial | Large; one permissioned tool at a time | Existing notes/tools/vision/doc support; other actions require scope review. |
 | Communications, meetings, iPhone, other devices, home | Missing | Large; accounts, permissions and user choices | No new integrations authorized or installed. |
 

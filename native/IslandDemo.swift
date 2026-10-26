@@ -48,9 +48,12 @@ enum IslandDemo {
     }
 
     static func run(_ island: IslandController) {
+        let selectedName = ProcessInfo.processInfo.environment["JARVIS_ISLAND_DEMO_STATE"]
+        let selected = cases.first { $0.0.rawValue == selectedName }
+        let sequence = selected.map { [$0] } ?? cases
         var index = 0
         func showNext() {
-            let item = cases[index % cases.count]
+            let item = sequence[index % sequence.count]
             island.approval(nil)
             switch item.0 {
             case .ready:
@@ -66,6 +69,7 @@ enum IslandDemo {
             index += 1
         }
         showNext()
+        if selected != nil { return }
         Timer.scheduledTimer(withTimeInterval: 2.5, repeats: true) { _ in showNext() }
     }
 }

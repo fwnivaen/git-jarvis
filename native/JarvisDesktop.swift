@@ -1,6 +1,30 @@
 import AppKit
+import AVFoundation
 import Foundation
 import MetalKit
+import Speech
+
+enum VoicePermissions {
+    static var microphone: String {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return "allowed"
+        case .denied: return "denied"
+        case .restricted: return "restricted"
+        case .notDetermined: return "not requested"
+        @unknown default: return "unknown"
+        }
+    }
+
+    static var speech: String {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized: return "allowed"
+        case .denied: return "denied"
+        case .restricted: return "restricted"
+        case .notDetermined: return "not requested"
+        @unknown default: return "unknown"
+        }
+    }
+}
 
 enum LaunchMode {
     case normal, ask(String), demo
@@ -106,6 +130,10 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                                   action: #selector(installSpeechModel), keyEquivalent: "")
         enhanced.target = self
         menu.addItem(enhanced)
+        let permissions = NSMenuItem(title: "Check voice permissions",
+                                     action: #selector(checkPermissions), keyEquivalent: "")
+        permissions.target = self
+        menu.addItem(permissions)
         menu.addItem(.separator())
         let dashboard = NSMenuItem(title: "Open dashboard", action: #selector(openDashboard), keyEquivalent: "")
         dashboard.target = self
@@ -139,6 +167,16 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.set(island.enabled, forKey: "showJarvisIsland")
     }
     @objc private func installSpeechModel() { speechModelInstaller.install(island: island) }
+    @objc private func checkPermissions() {
+        let microphone = VoicePermissions.microphone
+        let speech = VoicePermissions.speech
+        let detail = "Microphone: \(microphone) · Speech: \(speech)"
+        if microphone == "allowed" && speech == "allowed" {
+            island.notice(detail)
+        } else {
+            island.show(.permissionDenied, title: "Voice permissions", detail: detail)
+        }
+    }
     @objc private func openDashboard() {
         if let url = URL(string: "http://127.0.0.1:4700/") { NSWorkspace.shared.open(url) }
     }
@@ -166,6 +204,26 @@ enum JarvisDesktop {
                 exit(1)
             }
             withExtendedLifetime(lock) { print("Microphone lock available") }
+            return
+        }
+        if arguments.first == "--check-permissions" {
+            print("Microphone: \(VoicePermissions.microphone); Speech: \(VoicePermissions.speech)")
+            return
+        }
+        if arguments.first == "--measure-mic" {
+            exit(MicrophoneCheck.run())
+        }
+        if arguments.first == "--check-hotkeys" {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            let keys = Hotkeys()
+            print("Push-to-talk registered: \(keys.isPushToTalkAvailable)")
+            keys.pressed = { id in print("Hotkey pressed: \(id)"); fflush(stdout) }
+            keys.released = { id in print("Hotkey released: \(id)"); fflush(stdout) }
+            fflush(stdout)
+            Timer.scheduledTimer(withTimeInterval: 10, repeats: false) { _ in app.terminate(nil) }
+            app.run()
+            withExtendedLifetime(keys) {}
             return
         }
         let app = NSApplication.shared
