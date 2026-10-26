@@ -269,19 +269,42 @@ enum JarvisDesktop {
                     }
                     guard let request = try await AssetInventory.assetInstallationRequest(
                         supporting: [module]) else {
-                        print("No model download needed; checking installed status")
+                        let refreshed = await AssetInventory.status(forModules: [module])
+                        guard refreshed == .installed else {
+                            fputs("Enhanced English speech model is not installed yet\n", stderr)
+                            exit(1)
+                        }
+                        print("Enhanced English speech model already installed")
                         app.terminate(nil)
                         return
                     }
                     print("Downloading Apple on-device English speech model")
                     fflush(stdout)
                     try await request.downloadAndInstall()
+                    guard await AssetInventory.status(forModules: [module]) == .installed else {
+                        fputs("Enhanced English speech model download is still pending\n", stderr)
+                        exit(1)
+                    }
                     print("Enhanced English speech model installed")
                     app.terminate(nil)
                 } catch {
                     fputs("Enhanced English speech model installation failed\n", stderr)
                     exit(1)
                 }
+            }
+            app.run()
+            return
+        }
+        if arguments.first == "--check-speech-fixture", arguments.count == 2 {
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                guard await TranscriberSmoke.checkFile(arguments[1]) else {
+                    fputs("On-device file transcription failed\n", stderr)
+                    exit(1)
+                }
+                print("On-device file transcription passed")
+                app.terminate(nil)
             }
             app.run()
             return

@@ -23,6 +23,7 @@ swiftc -target arm64-apple-macosx27.0 -parse-as-library \
   native/IslandText.swift native/IslandViews.swift native/Island.swift native/OrbMetal.swift \
   native/IslandDemo.swift native/Sounds.swift native/Hotkeys.swift \
   native/Conversation.swift native/ModernSpeech.swift native/SpeechModelInstaller.swift \
+  native/TranscriberSmoke.swift \
   native/VoiceLock.swift native/MicrophoneCheck.swift \
   native/TaskWatcher.swift native/JarvisDesktop.swift \
   -o "$APP/Contents/MacOS/JarvisDesktop" \
