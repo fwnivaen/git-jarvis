@@ -17,10 +17,10 @@ Statuses describe this worktree and observed running system. **Verified working*
 | Screen snapshots and explicit vision | Partial | Medium; physical permission acceptance | Existing Eyes/Watch routes and tests; [architecture](ARCHITECTURE.md). |
 | Word document export | Partial | Small; live import/export acceptance | Existing document tools; [Ultra guide](../ULTRA-JARVIS.md). |
 | Focus retirement | Verified working | None | `/focus` 404 and existing removal tests. |
-| Native menu-bar push-to-talk | Partial | Small; physical key and recognition check on Mac | The desktop app was temporarily launched; microphone buffer latency measured, exclusive shortcut and handler checked. Physical key delivery is not yet verified. |
+| Native menu-bar push-to-talk | Partial | Small; speech accuracy and broader Mac acceptance | Physical key press/release reached the helper twice; the user confirmed the Island and audible reply worked. Microphone latency was measured separately. |
 | On-device `SpeechTranscriber` | Partial | Small; live audio acceptance | The current build reports the English model installed and passes a generated-file transcription smoke test; the modern path runs before legacy speech authorization. [Apple Speech session](https://developer.apple.com/videos/play/wwdc2025/277/). |
 | Legacy on-device speech fallback | Partial | Small; end-to-end recognition acceptance | English recognizer reports available and on-device support; physical audio input was measured separately. |
-| British spoken replies and muted text | Partial | Small; audible/mute acceptance | New synthesis and paced-text implementation; `--ask` exited normally after a local request. |
+| British spoken replies and muted text | Partial | Small; mute acceptance | The user confirmed an audible reply through physical push-to-talk. The refreshed helper now records mute registration and displays a mute notice; the physical mute check is pending. |
 | Island state model and static layouts | Partial | Medium; live timing and accessibility acceptance | 303 state checks, 30 static snapshots, runtime Metal check, live flat-pill geometry/focus and visual CPU; [report](voice-island-report.md). |
 | Live approval Island source | Missing | Medium; general approval engine | View state exists, live approval source does not. |
 | Workflow background completion announcements | Partial | Small; live transition and presence testing | Existing `/workflows` polling, three/thirty-second intervals; spoken summaries are opt-in. |

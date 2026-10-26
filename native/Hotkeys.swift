@@ -13,7 +13,10 @@ final class Hotkeys {
     private var handler: EventHandlerRef?
     private var registrations: [UInt32: EventHotKeyRef] = [:]
     var isPushToTalkAvailable: Bool { registrations[Self.pushToTalk] != nil }
+    var isMuteAvailable: Bool { registrations[Self.mute] != nil }
     private(set) var pushToTalkStatus: OSStatus = OSStatus(eventNotHandledErr)
+    private(set) var cancelStatus: OSStatus = OSStatus(eventNotHandledErr)
+    private(set) var muteStatus: OSStatus = OSStatus(eventNotHandledErr)
 
     init() {
         var types = [EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
@@ -36,8 +39,10 @@ final class Hotkeys {
         pushToTalkStatus = register(Self.pushToTalk, key: UInt32(kVK_Space),
                                     modifiers: UInt32(controlKey | shiftKey),
                                     options: OptionBits(kEventHotKeyExclusive))
-        register(Self.cancel, key: UInt32(kVK_Escape), modifiers: UInt32(optionKey))
-        register(Self.mute, key: UInt32(kVK_ANSI_M), modifiers: UInt32(optionKey | cmdKey))
+        cancelStatus = register(Self.cancel, key: UInt32(kVK_Escape), modifiers: UInt32(optionKey))
+        muteStatus = register(Self.mute, key: UInt32(kVK_ANSI_M),
+                              modifiers: UInt32(optionKey | cmdKey),
+                              options: OptionBits(kEventHotKeyExclusive))
     }
 
     deinit {

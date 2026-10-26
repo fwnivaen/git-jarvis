@@ -86,7 +86,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                     ReadySound.play()
                     self.conversation.pressToTalk()
                 case Hotkeys.cancel, Hotkeys.plainEscape: self.conversation.cancel()
-                case Hotkeys.mute: self.conversation.toggleMute()
+                case Hotkeys.mute: self.toggleMute()
                 default: break
                 }
             }
@@ -96,9 +96,14 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             }
             hotkeys = keys
             diagnostics.notice("Push-to-talk registration status: \(keys.pushToTalkStatus, privacy: .public)")
+            diagnostics.notice("Cancel registration status: \(keys.cancelStatus, privacy: .public)")
+            diagnostics.notice("Mute registration status: \(keys.muteStatus, privacy: .public)")
             if !keys.isPushToTalkAvailable {
                 island.show(.error, title: "Push-to-talk shortcut unavailable",
                             detail: "Check for another app using Control–Shift–Space")
+            } else if !keys.isMuteAvailable {
+                island.show(.error, title: "Mute shortcut unavailable",
+                            detail: "Check for another app using Option–Command–M")
             } else {
                 island.notice("Jarvis voice is ready")
             }
@@ -186,7 +191,12 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleMute() { conversation.toggleMute() }
+    @objc private func toggleMute() {
+        conversation.toggleMute()
+        muteItem?.title = conversation.muted ? "Unmute replies" : "Mute replies"
+        diagnostics.notice("Replies muted: \(self.conversation.muted, privacy: .public)")
+        island.notice(conversation.muted ? "Replies muted" : "Replies unmuted")
+    }
     @objc private func toggleBackgroundSpeech() {
         conversation.toggleBackgroundSpeech()
         backgroundSpeechItem?.state = conversation.backgroundSpeechEnabled ? .on : .off
@@ -317,6 +327,8 @@ enum JarvisDesktop {
             app.setActivationPolicy(.accessory)
             let keys = Hotkeys()
             print("Push-to-talk registered: \(keys.isPushToTalkAvailable); status: \(keys.pushToTalkStatus)")
+            print("Cancel registration status: \(keys.cancelStatus)")
+            print("Mute registered: \(keys.isMuteAvailable); status: \(keys.muteStatus)")
             keys.pressed = { id in print("Hotkey pressed: \(id)"); fflush(stdout) }
             keys.released = { id in print("Hotkey released: \(id)"); fflush(stdout) }
             fflush(stdout)
