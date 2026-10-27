@@ -3,7 +3,24 @@ import Foundation
 struct WorkflowCatalog: Decodable {
     let active: String?
     let runs: [WorkflowRun]
+    let noteActions: NoteActionCatalog?
+    enum CodingKeys: String, CodingKey { case active, activeIDs = "active_ids", runs, tasks, noteActions = "note_actions" }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let activeIDs = try container.decodeIfPresent([String].self, forKey: .activeIDs)
+        active = try activeIDs?.first ?? container.decodeIfPresent(String.self, forKey: .active)
+        if container.contains(.tasks) { runs = try container.decode([WorkflowRun].self, forKey: .tasks) }
+        else { runs = try container.decode([WorkflowRun].self, forKey: .runs) }
+        noteActions = try container.decodeIfPresent(NoteActionCatalog.self, forKey: .noteActions)
+    }
 }
+
+struct NoteActionCatalog: Decodable {
+    let pendingCount: Int
+    let items: [NoteActionSummary]
+    enum CodingKeys: String, CodingKey { case pendingCount = "pending_count", items }
+}
+struct NoteActionSummary: Decodable { let id: String; let status: String }
 
 struct WorkflowRun: Decodable {
     let id: String
@@ -22,7 +39,8 @@ struct WorkflowUpdate {
 }
 
 final class TaskWatcher {
-    static let endpoint = URL(string: "http://127.0.0.1:4700/workflows")!
+    static let endpoint = URL(string: "http://127.0.0.1:4700/stage2/tasks")!
+    static let legacyEndpoint = URL(string: "http://127.0.0.1:4700/workflows")!
     static let busyInterval: TimeInterval = 3
     static let idleInterval: TimeInterval = 30
     static let timeout: TimeInterval = 5
@@ -31,37 +49,61 @@ final class TaskWatcher {
 
     var onUpdate: (WorkflowUpdate) -> Void = { _ in }
     var onActivity: (Bool) -> Void = { _ in }
+    var onApproval: (String?) -> Void = { _ in }
     private var seen: [String: String] = [:]
     private var lastBusy: Bool?
+    private var lastActivity: Bool?
+    private var lastApproval: String?
     private var initialized = false
     private var stopped = false
     private var timer: Timer?
+    private var useLegacyEndpoint = false
+    private let session: URLSession
+    private let catalogEndpoint: URL
+    private let fallbackEndpoint: URL
+
+    init(session: URLSession = .shared, endpoint: URL = TaskWatcher.endpoint,
+         legacyEndpoint: URL = TaskWatcher.legacyEndpoint) {
+        self.session = session
+        self.catalogEndpoint = endpoint
+        self.fallbackEndpoint = legacyEndpoint
+    }
 
     func start() { poll() }
     func stop() { stopped = true; timer?.invalidate() }
 
-    private func poll() {
+    func poll() {
         guard !stopped else { return }
-        var request = URLRequest(url: Self.endpoint)
+        var request = URLRequest(url: useLegacyEndpoint ? fallbackEndpoint : catalogEndpoint)
         request.timeoutInterval = Self.timeout
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+        session.dataTask(with: request) { [weak self] data, response, _ in
             DispatchQueue.main.async {
                 guard let self, !self.stopped else { return }
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-                      let data, let catalog = try? JSONDecoder().decode(WorkflowCatalog.self, from: data) else {
-                    if self.lastBusy != false {
-                        self.lastBusy = false
-                        self.onActivity(false)
-                    }
-                    self.schedule(Self.idleInterval)
+                if let http = response as? HTTPURLResponse, http.statusCode == 404, !self.useLegacyEndpoint {
+                    self.useLegacyEndpoint = true
+                    self.poll()
                     return
                 }
-                let busy = catalog.active != nil || catalog.runs.contains {
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let data, let catalog = try? JSONDecoder().decode(WorkflowCatalog.self, from: data) else {
+                    // A failed poll cannot confirm that ongoing work stopped.
+                    self.schedule(self.lastBusy == true ? Self.busyInterval : Self.idleInterval)
+                    return
+                }
+                let workActive = catalog.active != nil || catalog.runs.contains {
                     !Self.terminalStatuses.contains($0.status)
                 }
-                if self.lastBusy != busy {
-                    self.lastBusy = busy
-                    self.onActivity(busy)
+                let pending = catalog.noteActions?.items.filter { $0.status == "pending" }.count ?? 0
+                let approval = pending > 0 ? (pending == 1 ? "A note edit needs review" : "\(pending) note edits need review") : nil
+                if self.lastApproval != approval {
+                    self.lastApproval = approval
+                    self.onApproval(approval)
+                }
+                let busy = workActive || pending > 0
+                self.lastBusy = busy
+                if self.lastActivity != workActive {
+                    self.lastActivity = workActive
+                    self.onActivity(workActive)
                 }
                 if !self.initialized {
                     self.seen = catalog.runs.reduce(into: [:]) { result, run in result[run.id] = run.status }

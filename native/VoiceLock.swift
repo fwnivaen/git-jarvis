@@ -2,12 +2,12 @@ import Darwin
 import Foundation
 
 final class VoiceLock {
+    // Use a stable per-user path across launch environments with different TMPDIR.
+    static let defaultPath = "/tmp/jarvis-voice-owner-\(getuid()).lock"
     private let descriptor: Int32
 
-    init?() {
-        let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("jarvis-voice-owner-\(getuid()).lock").path
-        let fd = open(path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+    init?(path: String = VoiceLock.defaultPath) {
+        let fd = open(path, O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, S_IRUSR | S_IWUSR)
         guard fd >= 0 else { return nil }
         var info = stat()
         guard fstat(fd, &info) == 0, info.st_uid == getuid(),

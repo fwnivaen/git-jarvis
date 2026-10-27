@@ -38,7 +38,7 @@ class LangGraphAdapter:
     def status(self, run_id=None):
         run_id=run_id or self.bound
         result=self.service.detail(run_id)
-        result['settled']=self.service.active!=run_id
+        result['settled']=self.service.settled(run_id)
         return result
     def cancel(self, run_id=None):return self.service.cancel(run_id or self.bound)
     def resume(self, run_id):return self.service.start(resume=run_id)

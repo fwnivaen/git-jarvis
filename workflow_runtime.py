@@ -21,6 +21,7 @@ from ultra_tools import ToolSession
 from ultra import CHECKED_SCHEMA, REPORT_SCHEMA, STAGE_ONE_BOUNDARY, TOOLS_BOUNDARY, checked, checked_report, decode
 from ultra_workflows import workflow_template
 from workflow_graph import compile_workflow, GRAPH_RECURSION_LIMIT
+from task_limits import TASK_MAX_CONCURRENT, TASK_LIMIT_NOTICE, parse_task_limit
 
 ROOT = Path(__file__).resolve().parent / '.local' / 'graph-workflows'
 MAX_RUNS = 50
@@ -34,6 +35,9 @@ MAX_RESTARTS = 2
 MAX_TOOL_CALLS = 24
 SQL_TIMEOUT_S = 5
 TOOL_POLL_S = 0.1
+BRIDGE_CLEANUP_RETRY_INITIAL_S = 0.5
+BRIDGE_CLEANUP_RETRY_MAX_S = 30
+BRIDGE_CLEANUP_RETRY_BACKOFF = 2
 STREAM_WAIT_S = 1
 STREAM_CONNECTION_S = 20
 MAX_STREAMS = 4
@@ -214,9 +218,19 @@ class GraphJobs:
             self.service.store.save(run)
         self.service.event(self.run_id, 'tool_started', slot=slot, tool=name)
         delivered = queue.Queue(maxsize=1)
-        if not self.service.tool_slots.acquire(blocking=False):
-            self.service.event(self.run_id, 'tool_failed', slot=slot, tool=name)
-            raise BridgeError('tool_failed')
+        # Two admitted tasks share the original tool budget. Contention waits
+        # within this run's deadline instead of turning normal load into failure.
+        while not self.service.tool_slots.acquire(timeout=TOOL_POLL_S):
+            self.guard()
+            if time.monotonic() >= deadline:
+                raise BridgeError('timeout')
+        try:
+            self.guard()
+            if time.monotonic() >= deadline:
+                raise BridgeError('timeout')
+        except Exception:
+            self.service.tool_slots.release()
+            raise
         with self.service.lock:
             self.service.pending_tools[self.run_id] = self.service.pending_tools.get(self.run_id, 0) + 1
         def execute():
@@ -232,7 +246,9 @@ class GraphJobs:
                         try:
                             saved = self.service.store.get(self.run_id)
                             if saved['status'] in TERMINAL:
-                                self.service.change(self.run_id, cleanup='complete')
+                                owner = self.service.owners.get(self.run_id, {})
+                                self.service.change(self.run_id,
+                                    cleanup='pending' if owner.get('bridge_cleanup_pending') else 'complete')
                                 self.service.release_owner(self.run_id)
                         except (sqlite3.Error, WorkflowError):
                             pass
@@ -323,12 +339,22 @@ class GraphJobs:
                         call_payload = routing.compact_payload(call_payload)
                     except routing.RoutingBudgetError as error:
                         raise BridgeError(error.code) from None
-                raw = self.bridge.complete(model=row['model'], effort=row['effort'],
-                    system=self.service.system.replace(LEGACY_TOOL_BOUNDARY, ANALYSIS_TOOL_BOUNDARY)
-                        + (TOOLS_BOUNDARY if tools else REVIEW_BOUNDARY)
-                        + ' Perform the assigned task. Return concise supported findings, never private reasoning.',
-                    payload=call_payload, schema=schema,
-                    deadline=deadline, observer=observer, cancel_event=self.model_cancel, **options)
+                while not self.service.model_slots.acquire(timeout=TOOL_POLL_S):
+                    self.guard()
+                    if time.monotonic() >= deadline:
+                        raise BridgeError('timeout')
+                try:
+                    self.guard()
+                    if time.monotonic() >= deadline:
+                        raise BridgeError('timeout')
+                    raw = self.bridge.complete(model=row['model'], effort=row['effort'],
+                        system=self.service.system.replace(LEGACY_TOOL_BOUNDARY, ANALYSIS_TOOL_BOUNDARY)
+                            + (TOOLS_BOUNDARY if tools else REVIEW_BOUNDARY)
+                            + ' Perform the assigned task. Return concise supported findings, never private reasoning.',
+                        payload=call_payload, schema=schema,
+                        deadline=deadline, observer=observer, cancel_event=self.model_cancel, **options)
+                finally:
+                    self.service.model_slots.release()
                 self.guard()
                 decoded = decode(raw)
                 validator(decoded, sources)
@@ -400,22 +426,44 @@ class GraphJobs:
 
 
 class WorkflowService:
-    def __init__(self, settings, tools, bridge_factory, slots, system, root=ROOT, redactor=None):
+    def __init__(self, settings, tools, bridge_factory, slots, system, root=ROOT, redactor=None,
+                 max_concurrent=None, model_slots=None):
         self.settings, self.tools, self.bridge_factory, self.slots, self.system = settings, tools, bridge_factory, slots, system
         self.root, self.redactor = Path(root), redactor or Redactor()
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.stream_slots = threading.BoundedSemaphore(MAX_STREAMS)
         self.tool_slots = threading.BoundedSemaphore(MAX_WORKERS)
+        self.model_slots = model_slots if model_slots is not None else threading.BoundedSemaphore(MAX_WORKERS)
+        self.max_concurrent = TASK_MAX_CONCURRENT if max_concurrent is None else parse_task_limit(max_concurrent)
+        self.limit_notice = TASK_LIMIT_NOTICE if max_concurrent is None else None
         self.pending_tools = {}
         self.finished_executors = set()
         self.store = None
         self.bridge = None
-        self.active = None
+        self.owners = {}
+        self._cleanup_stop = threading.Event()
+        self._cleanup_threads = set()
+        # Keep the most recently launched thread for existing diagnostic callers.
+        # Lifecycle and cancellation always use the per-run owner below.
         self.thread = None
-        self.cancel_event = None
         self.unavailable = None
         self.source_resolver = None
+
+    @property
+    def active_ids(self):
+        with self.lock:
+            return list(self.owners)
+
+    @property
+    def active(self):
+        """Legacy single-ID view for existing clients; new clients use active_ids."""
+        with self.lock:
+            return next(iter(self.owners), None)
+
+    def settled(self, run_id):
+        with self.lock:
+            return run_id not in self.owners
 
     def initialize(self):
         with self.lock:
@@ -453,10 +501,12 @@ class WorkflowService:
         # Cancellation fences delivery promptly, but the shared admission slot
         # belongs to the run until BOTH graph and underlying callbacks settle.
         with self.lock:
-            if (run_id == self.active and run_id in self.finished_executors
+            if (run_id in self.owners and run_id in self.finished_executors
+                    and not self.owners[run_id].get('bridge_cleanup_pending')
                     and not self.pending_tools.get(run_id, 0)):
-                self.active = None
+                del self.owners[run_id]
                 self.finished_executors.discard(run_id)
+                self.pending_tools.pop(run_id, None)
                 self.slots.release()
                 self.condition.notify_all()
 
@@ -522,7 +572,8 @@ class WorkflowService:
                 run.get('routing_budget', [])).snapshot() if run['settings'].get('adaptive_routing_enabled') else None,
             'sequence': run['sequence'], 'events': run['events'], 'restarts': run['restarts'],
             'can_retry': run['status'] in ('failed', 'cancelled', 'interrupted') and now < run['expires_at']
-                and run['restarts'] < MAX_RESTARTS and not self.active
+                and run['restarts'] < MAX_RESTARTS and run['id'] not in self.owners
+                and len(self.owners) < self.max_concurrent
                 and all(row['status'] == 'complete' or
                     (row['attempts'] <= self.settings().worker_retries and row['expires_at'] > now)
                     for row in run['agents'].values())
@@ -537,9 +588,11 @@ class WorkflowService:
             self.initialize()
         with self.lock:
             return {'enabled': self.enabled(), 'available': self.store is not None, 'notice': self.unavailable,
-                'engine': 'LangGraph', 'active': self.active,
+                'engine': 'LangGraph', 'active': self.active, 'active_ids': self.active_ids,
+                'capacity_notice': self.limit_notice,
                 'capabilities': {'cancel': True, 'resume': True, 'pause': False, 'watch': False},
-                'limits': {'concurrent_runs': 1, 'max_workers': min(MAX_WORKERS, self.settings().max_workers),
+                'limits': {'concurrent_runs': self.max_concurrent, 'max_workers': min(MAX_WORKERS, self.settings().max_workers),
+                    'shared_model_calls': MAX_WORKERS, 'shared_tool_calls': MAX_WORKERS,
                     'request_timeout_s': self.settings().request_timeout_s, 'max_runs': MAX_RUNS},
                 'workflows': [{'id': key, 'label': value} for key, value in WORKFLOW_LABELS.items()],
                 'runs': [self.public(run) for run in self.store.all()] if self.store else []}
@@ -557,6 +610,8 @@ class WorkflowService:
         if self.store is None:
             raise WorkflowError(self.unavailable, 503)
         with self.lock:
+            if self._cleanup_stop.is_set():
+                raise WorkflowError('The workflow service is shutting down.', 409)
             if resume is None:
                 if (not isinstance(question, str) or not question.strip() or len(question) > MAX_QUESTION_CHARS
                         or not isinstance(workflow, str) or workflow not in WORKFLOW_LABELS):
@@ -567,8 +622,9 @@ class WorkflowService:
                     return self.public(existing)
             elif request_key is not None:
                 raise WorkflowError('Resume uses its existing run identity.')
-            if self.active or not self.slots.acquire(blocking=False):
-                raise WorkflowError('JARVIS is already working. Wait or cancel the active workflow.', 429)
+            if len(self.owners) >= self.max_concurrent or not self.slots.acquire(blocking=False):
+                raise WorkflowError('JARVIS task capacity is occupied. Wait or cancel an active task.', 429)
+            owned_id = None
             try:
                 if resume is not None:
                     run = self.store.get(resume)
@@ -593,17 +649,23 @@ class WorkflowService:
                     self.store.admit(run, request_key, fingerprint)
                 else:
                     self.store.save(run)
-                self.active, self.cancel_event = run['id'], threading.Event()
-                self.thread = threading.Thread(target=self._execute, args=(run['id'], resume is not None), daemon=True,
+                cancel = threading.Event()
+                thread = threading.Thread(target=self._execute, args=(run['id'], resume is not None, cancel), daemon=True,
                     name='jarvis-langgraph')
-                self.thread.start()
+                owned_id = run['id']
+                self.owners[owned_id] = {'thread': thread, 'cancel': cancel,
+                    'bridge': None, 'bridge_cleanup_pending': False,
+                    'bridge_lock': threading.Lock()}
+                self.thread = thread
+                thread.start()
                 return self.public(run)
             except BaseException:
-                self.active = None
+                if owned_id is not None:
+                    self.owners.pop(owned_id, None)
                 self.slots.release()
                 raise
 
-    def _execute(self, run_id, resume):
+    def _execute(self, run_id, resume, cancel):
         conn = None
         jobs = None
         try:
@@ -613,9 +675,14 @@ class WorkflowService:
             # if a user's shell has LANGSMITH_TRACING set. Never enable cloud traces.
             from langsmith import tracing_context
             conn = RunStore.connect(self.root / (run_id + '.sqlite'))
-            if self.bridge is None:
-                self.bridge = self.bridge_factory()
-            jobs = GraphJobs(self, run_id, self.bridge, self.cancel_event)
+            with self.lock:
+                # An unconfirmed turn interrupt can close a bridge process.
+                # A separate bridge per task prevents it from killing another
+                # admitted task; workers inside this task still share one.
+                bridge = self.bridge_factory()
+                self.owners[run_id]['bridge'] = bridge
+                self.bridge = bridge  # Most recent bridge, diagnostics only.
+            jobs = GraphJobs(self, run_id, bridge, cancel)
             graph = compile_workflow(jobs, SqliteSaver(conn, serde=JsonPlusSerializer(
                 pickle_fallback=False, allowed_json_modules=(), allowed_msgpack_modules=())))
             config = {'configurable': {'thread_id': run_id}, 'max_concurrency': min(MAX_WORKERS, self.settings().max_workers),
@@ -649,43 +716,129 @@ class WorkflowService:
         except Exception as error:
             code = getattr(error, 'code', 'storage_unavailable' if isinstance(error, (OSError, sqlite3.Error)) else 'inference_failed')
             code = code if code in SAFE_FAILURES else 'inference_failed'
-            status = 'cancelled' if self.cancel_event.is_set() else 'failed'
+            status = 'cancelled' if cancel.is_set() else 'failed'
             self.change(run_id, status=status, error=code, ended_at=time.time())
             self.event(run_id, status)
         finally:
             if conn is not None:
                 conn.close()
+            self.close_bridge(run_id)
             with self.lock:
-                self.change(run_id, cleanup='pending' if self.pending_tools.get(run_id, 0) else 'complete')
+                owner = self.owners.get(run_id, {})
+                self.change(run_id, cleanup='pending' if self.pending_tools.get(run_id, 0)
+                    or owner.get('bridge_cleanup_pending') else 'complete')
                 if jobs is not None:
                     jobs.session.close()
                 self.finished_executors.add(run_id)
                 self.release_owner(run_id)
+                self._schedule_cleanup_retry(run_id)
                 try:
                     from outcome_collection import capture
                     self.change(run_id, outcome_collection=capture(self.store.get(run_id)))
                 except Exception:
                     self.change(run_id, outcome_collection='unavailable')
 
+    def close_bridge(self, run_id, expected_owner=None):
+        """Keep capacity if process cleanup could not be confirmed."""
+        with self.lock:
+            owner = self.owners.get(run_id)
+            if expected_owner is not None and owner is not expected_owner:
+                return
+        if owner is None:
+            return
+        with owner['bridge_lock']:
+            bridge = owner.get('bridge')
+            if bridge is None:
+                return
+            try:
+                bridge.close()
+                pending = False
+            except Exception:
+                pending = True
+            with self.lock:
+                owner['bridge_cleanup_pending'] = pending
+                if not pending:
+                    owner['bridge'] = None
+
+    def _schedule_cleanup_retry(self, run_id):
+        """One background closer per finished owner; dashboard reads never wait."""
+        with self.lock:
+            owner = self.owners.get(run_id)
+            if (self._cleanup_stop.is_set() or owner is None
+                    or run_id not in self.finished_executors
+                    or not owner.get('bridge_cleanup_pending')
+                    or owner.get('cleanup_thread') is not None):
+                return
+            thread = threading.Thread(target=self._retry_bridge_cleanup,
+                args=(run_id, owner), daemon=True, name='jarvis-workflow-cleanup')
+            owner['cleanup_thread'] = thread
+            self._cleanup_threads.add(thread)
+            thread.start()
+
+    def _retry_bridge_cleanup(self, run_id, owner):
+        delay = BRIDGE_CLEANUP_RETRY_INITIAL_S
+        try:
+            while not self._cleanup_stop.wait(delay):
+                with self.lock:
+                    if self.owners.get(run_id) is not owner:
+                        return
+                self.close_bridge(run_id, expected_owner=owner)
+                with self.condition:
+                    if self.owners.get(run_id) is not owner:
+                        return
+                    if not owner.get('bridge_cleanup_pending'):
+                        try:
+                            self.change(run_id, cleanup='pending'
+                                if self.pending_tools.get(run_id, 0) else 'complete')
+                        except (OSError, sqlite3.Error):
+                            # Keep admission ownership until its durable state
+                            # can be updated; process capacity is already free.
+                            pass
+                        else:
+                            self.release_owner(run_id)
+                            return
+                delay = min(BRIDGE_CLEANUP_RETRY_MAX_S,
+                    delay * BRIDGE_CLEANUP_RETRY_BACKOFF)
+        finally:
+            with self.condition:
+                thread = threading.current_thread()
+                if owner.get('cleanup_thread') is thread:
+                    owner['cleanup_thread'] = None
+                self._cleanup_threads.discard(thread)
+                self.condition.notify_all()
+
     def cancel(self, run_id):
         with self.lock:
-            if run_id != self.active:
+            owner = self.owners.get(run_id)
+            if owner is None or run_id in self.finished_executors:
                 raise WorkflowError('That workflow is no longer running.', 409)
-            self.cancel_event.set()
+            owner['cancel'].set()
             self.change(run_id, status='cancelling')
             self.event(run_id, 'cancel_requested')
         return self.detail(run_id)
 
     def close(self):
-        if self.cancel_event:
-            self.cancel_event.set()
-        if self.bridge:
-            self.bridge.close()
-        if self.thread:
-            self.thread.join(timeout=SQL_TIMEOUT_S)
+        with self.lock:
+            self._cleanup_stop.set()
+            owners = list(self.owners.items())
+            cleanup_threads = list(self._cleanup_threads)
+            for _, owner in owners:
+                owner['cancel'].set()
+        for run_id, _ in owners:
+            self.close_bridge(run_id)
+        deadline = time.monotonic() + SQL_TIMEOUT_S
+        for _, owner in owners:
+            owner['thread'].join(timeout=max(0, deadline-time.monotonic()))
+        for thread in cleanup_threads:
+            thread.join(timeout=max(0, deadline-time.monotonic()))
         with self.condition:
-            deadline = time.monotonic() + SQL_TIMEOUT_S
+            for run_id, owner in owners:
+                if run_id in self.finished_executors:
+                    self.change(run_id, cleanup='pending' if self.pending_tools.get(run_id, 0)
+                        or owner.get('bridge_cleanup_pending') else 'complete')
+                    self.release_owner(run_id)
             while any(self.pending_tools.values()) and time.monotonic() < deadline:
                 self.condition.wait(timeout=min(TOOL_POLL_S, deadline-time.monotonic()))
-            if self.store and not (self.thread and self.thread.is_alive()) and not any(self.pending_tools.values()):
+            if (self.store and not self.owners and not self._cleanup_threads
+                    and not any(self.pending_tools.values())):
                 self.store.close()

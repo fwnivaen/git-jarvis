@@ -16,10 +16,13 @@ struct IslandDisplay: Equatable {
     let detail: String
     let wordIndex: Int?
     let microphoneLevel: Double
+    var listeningExpanded = false
 
     var isExpanded: Bool {
         switch phase {
-        case .listening, .thinking, .working, .speaking, .mutedReply, .approval,
+        case .listening:
+            return listeningExpanded
+        case .thinking, .working, .speaking, .mutedReply, .approval,
              .permissionDenied, .microphoneFailure, .error, .modelDownload:
             return true
         default:
@@ -41,12 +44,14 @@ struct IslandState {
     static let notificationExpiry: TimeInterval = 30.0
     static let earlyReleaseDuration: TimeInterval = 1.6
     static let maximumNotices = 32
+    static let listeningExpandDelay: TimeInterval = 0.3
 
     private(set) var activePhase: IslandPhase?
     private(set) var activeTitle = ""
     private(set) var activeDetail = ""
     private(set) var activeWord: Int?
     private(set) var microphoneLevel = 0.0
+    private(set) var firstListeningWordsAt: Date?
     private(set) var approvalTitle: String?
     private(set) var backgroundWorkTitle: String?
     private(set) var transient: IslandDisplay?
@@ -60,6 +65,8 @@ struct IslandState {
         activeTitle = title
         activeDetail = detail
         activeWord = nil
+        firstListeningWordsAt = nil
+        microphoneLevel = 0
         transient = nil
         transientUntil = nil
     }
@@ -70,6 +77,13 @@ struct IslandState {
         if let detail { activeDetail = detail }
         if let wordIndex { activeWord = wordIndex }
         if let microphoneLevel { self.microphoneLevel = min(1, max(0, microphoneLevel)) }
+    }
+
+    mutating func transcript(_ phrase: String, at now: Date = Date()) {
+        guard activePhase == .listening else { return }
+        let hasWords = !phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        activeTitle = hasWords ? phrase : "Listening"
+        if hasWords && firstListeningWordsAt == nil { firstListeningWordsAt = now }
     }
 
     mutating func end(_ kind: IslandReplyKind, text: String, at now: Date = Date()) {
@@ -121,7 +135,10 @@ struct IslandState {
         notices.removeAll { now.timeIntervalSince($0.createdAt) >= Self.notificationExpiry }
         if let phase = activePhase {
             return IslandDisplay(phase: phase, title: activeTitle, detail: activeDetail,
-                                 wordIndex: activeWord, microphoneLevel: microphoneLevel)
+                                 wordIndex: activeWord, microphoneLevel: microphoneLevel,
+                                 listeningExpanded: firstListeningWordsAt.map {
+                                     now.timeIntervalSince($0) >= Self.listeningExpandDelay
+                                 } ?? false)
         }
         if let approvalTitle {
             return IslandDisplay(phase: .approval, title: "Review ↗", detail: approvalTitle,

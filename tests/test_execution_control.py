@@ -60,6 +60,30 @@ class ControlFixtures(unittest.TestCase):
         self.store.transition(self.run['id'],'cancelled')
         self.store.transition(other['id'],'running')
 
+    def test_explicit_two_owner_limit_counts_waiting_and_cancelling(self):
+        store = ControlStore(Path(self.tmp.name)/'two-owner.sqlite', max_active=2)
+        self.addCleanup(store.close)
+        def admit(key):
+            return store.admit(key, conversation_id='c', project_id='p', engine='fixture',
+                versions=VERSIONS, permissions=[], duration_s=60)[0]['id']
+        first, second, third = [admit(key) for key in ('one', 'two', 'three')]
+        store.transition(first, 'running')
+        store.transition(second, 'running')
+        store.transition(first, 'waiting')
+        store.transition(second, 'cancelling')
+        with self.assertRaises(ControlError):
+            store.transition(third, 'running')
+        store.transition(second, 'cancelled')
+        store.transition(third, 'running')
+        self.assertEqual(store.get(first)['status'], 'waiting')
+        self.assertEqual(store.get(third)['status'], 'running')
+
+    def test_invalid_explicit_owner_limit_is_rejected_before_store_creation(self):
+        for value in (True, 0, -1, 9, ' 2', 2.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ControlStore(Path(self.tmp.name)/'invalid.sqlite', max_active=value)
+        self.assertFalse((Path(self.tmp.name)/'invalid.sqlite').exists())
+
     def test_permissions_cannot_expand(self):
         with self.assertRaises(ControlError):
             self.store.issue(self.run['id'],parent_token=self.token,permissions={'shell'})

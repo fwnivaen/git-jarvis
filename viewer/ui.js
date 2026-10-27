@@ -126,6 +126,7 @@
   function workspaceFrame(title,description){const view=$('workspace-view');view.replaceChildren();const body=create('div','workspace-body'),head=create('div','workspace-header'),titles=create('div');titles.append(create('h1',null,title),create('p',null,description));const back=create('button','control','Back to galaxy');back.onclick=()=>setWorkspace('galaxy');head.append(titles,back);body.append(head);view.append(body);return body;}
   function setWorkspace(name){
     window.JarvisWorkflows?.dispose();
+    window.JarvisLocalServices?.dispose();
     currentWorkspace=name;document.body.dataset.workspace=name;window.JarvisGalaxy?.setVisible(name==='galaxy');hidePreview();hideInsight();clearInterval(workTimer);workTimer=null;
     for(const selector of ['.sidebar','#graph','.scene-controls','#jarvis-orb-host','#detail','#chat','#galaxy-tree']){const element=document.querySelector(selector);if(element){element.inert=name!=='galaxy';if(name==='galaxy')element.removeAttribute('aria-hidden');else element.setAttribute('aria-hidden','true');}}
     $('workspace-view').hidden=name==='galaxy';$('breadcrumb').textContent='/ '+({galaxy:'Knowledge Galaxy',brain:'Project Brain',work:'Mission Control',integrations:'Integrations'}[name]||name.charAt(0).toUpperCase()+name.slice(1));
@@ -181,23 +182,28 @@
       const a=document.createElementNS(ns,'a');a.setAttribute('href','#');a.setAttribute('aria-label',n.label);a.onclick=e=>{e.preventDefault();openNote(n);};const dot=document.createElementNS(ns,'circle');dot.setAttribute('cx',x);dot.setAttribute('cy',y);dot.setAttribute('r','3');dot.style.fill=color(n);const title=document.createElementNS(ns,'title');title.textContent=n.label;a.append(dot,title);svg.append(a);});
     const core=document.createElementNS(ns,'circle');core.setAttribute('cx',cx);core.setAttribute('cy',cy);core.setAttribute('r','5');svg.append(core);return svg;
   }
-  function approveEdit(node,data,text,done){
+  async function approveEdit(node,data,text,done){
     if(approval?.dataset.executing==='true'){announce('The approved save is still being verified.');return;}
     if(approval)approval.remove();const operation_session=operationKey(),card=create('section','approval-card material');card.id='approval-card';card.setAttribute('role','dialog');card.setAttribute('aria-label','Approve note edit');
-    card.append(create('div','eyebrow','Confirm'),create('h2',null,'Save changes?'),create('p',null,node.label+' · This replaces the current Markdown content. The file revision is checked before writing.'));
+    card.append(create('div','eyebrow','Confirm'),create('h2',null,'Save changes?'),create('p',null,node.label+' · This replaces the current Markdown content. Approval expires in five minutes. The file revision is checked before writing.'));
+    const preview=create('details','workflow-output');preview.append(create('summary',null,'Review exact contents'),create('h3',null,'Before'),create('pre',null,data.text),create('h3',null,'After'),create('pre',null,text));card.append(preview);
     const actions=create('div','card-actions'),confirm=create('button','primary-button','Save changes'),cancel=button('Not now',()=>{card.remove();approval=null;window.JarvisOrb?.setStatus(null);done?.();});
+    let proposed=null;confirm.disabled=true;
     confirm.onclick=async()=>{confirm.disabled=true;cancel.disabled=true;card.dataset.executing='true';window.JarvisOrb?.setStatus('EXECUTING',{progress:null,message:'Saving note'});
-      try{const result=await request('/note',{id:node.id,text,revision:data.revision,approved:true,operation_session});if(result.verified!==true)throw Error('The saved result was not verified.');
+      try{if(!proposed)throw Error('The exact edit is not ready for approval.');const response=await request('/approvals/decide',{id:proposed.id,fingerprint:proposed.fingerprint,decision:'approve'}),result=response.result;if(result?.verified!==true)throw Error('The saved result was not verified.');
         binding?.replaceGraph(result.graph);card.dataset.executing='false';window.JarvisOrb?.setStatus(null);card.replaceChildren(create('div','eyebrow','Verified'),create('h2',null,'Changes saved'),create('p',null,'Saved to your existing Markdown file and indexed for recall.'),button('Done',()=>{card.remove();approval=null;window.JarvisOrb?.setStatus(null);done?.();}));sound();announce('Saved and verified '+node.label);
       }catch(error){card.dataset.executing='false';card.append(create('p','answer-meta',error.message));confirm.disabled=false;cancel.disabled=false;window.JarvisOrb?.setStatus('ERROR',{message:error.message});}
     };
     actions.append(confirm,cancel);card.append(actions);$('stage').append(card);approval=card;$('jarvis-orb-host').inert=false;$('jarvis-orb-host').removeAttribute('aria-hidden');window.JarvisOrb?.setStatus('AWAITING APPROVAL',{target:'#approval-card'});confirm.focus();
+    try{proposed=await request('/approvals/propose',{id:node.id,text,revision:data.revision,request_key:operation_session});if(approval===card&&card.isConnected){confirm.disabled=proposed.status!=='pending';card.append(create('p','answer-meta','This edit is queued in Mission Control. “Not now” leaves it there for later review.'));}}
+    catch(error){if(approval===card&&card.isConnected)card.append(create('p','answer-meta',error.message));}
   }
-  function renderWork(){const body=workspaceFrame('Mission Control','Live state from your local JARVIS services.');window.JarvisWorkflows?.mount(body);row(body,'Eyes','Local posture tracking; camera stays off until you enable it.',button('Toggle Eyes',()=>$('eyes').click()));row(body,'Screen watch','One Entire Screen share for watching and questions.',button('Toggle watch',()=>$('screen').click()));row(body,'Current activity','',create('output','service-state'));body.lastChild.lastChild.id='work-activity';row(body,'Watch state','',create('output','service-state'));body.lastChild.lastChild.id='work-watch';updateWork();}
+  function renderWork(){const body=workspaceFrame('Mission Control','Live state from your local JARVIS services.');window.JarvisWorkflows?.mount(body);window.JarvisLocalServices?.mountApprovals(body);row(body,'Eyes','Local posture tracking; camera stays off until you enable it.',button('Toggle Eyes',()=>$('eyes').click()));row(body,'Screen watch','One Entire Screen share for watching and questions.',button('Toggle watch',()=>$('screen').click()));row(body,'Current activity','',create('output','service-state'));body.lastChild.lastChild.id='work-activity';row(body,'Watch state','',create('output','service-state'));body.lastChild.lastChild.id='work-watch';updateWork();}
   async function updateWork(){try{watchState=await request('/watch');if($('work-watch'))$('work-watch').textContent=watchState.active?'Watching':'Off';if($('work-activity'))$('work-activity').textContent=$('voice-status').textContent||'Ready';}catch{if($('work-activity'))$('work-activity').textContent='Local server unavailable';}}
   function settingSelect(parent,title,description,key,options){const select=create('select');select.setAttribute('aria-label',title);options.forEach(([value,text])=>{const option=create('option',null,text);option.value=value;select.append(option);});select.value=preferences[key]||options[0][0];select.onchange=()=>{preferences[key]=select.value;applyPreferences();};row(parent,title,description,select);}
   function renderSettings(kind){
     const body=workspaceFrame(kind==='voice'?'Voice':'Settings','Preferences apply immediately and stay on this device.');
+    window.JarvisLocalServices?.mountHealth(body);
     if(kind!=='voice')window.JarvisUltra?.mountSettings(body);
     if(kind!=='voice'){settingSelect(body,'Appearance','Dark observatory or warm paper.','theme',[['dark','Dark'],['light','Light'],['system','System']]);settingSelect(body,'Motion','System accessibility settings are always respected.','motion',[['system','Follow system'],['reduced','Reduced motion']]);
       const sounds=button(preferences.sounds?'On':'Off',()=>{preferences.sounds=!preferences.sounds;store(SETTINGS.preferenceKey,preferences);sounds.textContent=preferences.sounds?'On':'Off';sound();});row(body,'Interface sounds','Quiet, optional, and off by default.',sounds);
@@ -205,9 +211,10 @@
       const measured=window.JarvisGalaxy?.performance;const performance=create('output','service-state',measured?`${measured.nodes} notes · ${measured.links} links · ${measured.drawCalls} draw calls · ${measured.idle?'idle rendering paused':'active'} · hover ${measured.hoverMs.toFixed(2)}ms`:'Open the galaxy to collect rendering measurements.');performance.id='perf-readout';row(body,'Measured rendering','Measurements describe this device and session; no hardware certification is implied.',performance);
     }
     row(body,'Microphone','Only the explicit microphone control enables listening.',button($('mic').getAttribute('aria-pressed')==='true'?'Turn off':'Enable',()=>$('mic').click()));
+    row(body,'Desktop voice shortcuts','Hold Control–Shift–Space to talk from any app. Option–Escape cancels; Option–Command–M mutes. Desktop Island and background-update controls are in the ✦ menu.');
     const wake=button(preferences.wake?'On':'Off',()=>{preferences.wake=!preferences.wake;applyPreferences();wake.textContent=preferences.wake?'On':'Off';});
     row(body,'Wake phrase · Jarvis','Optional, off by default. Applies only after you enable Mic. Hold Space, stop, and relief remain immediate.',wake);
-    row(body,'Speech output','Daniel · British English. Real audio spectrum is available during local WAV playback.',button('Stop speaking',()=>$('stop-speech').click()));
+    row(body,'Browser speech output','British English voice preference when available. This control stops browser speech.',button('Stop speaking',()=>$('stop-speech').click()));
     const devices=create('select');devices.setAttribute('aria-label','Microphone device');devices.append(new Option('System default',''));devices.onchange=()=>window.JarvisVoice?.setInputDevice?.(devices.value);row(body,'Input device','Native speech uses the selected device when available.',devices);
     request('/voice/devices').then(data=>{for(const device of data.devices||[])devices.append(new Option(device.name,device.id));devices.value=window.JarvisVoice?.inputDevice?.()||'';}).catch(()=>{});
     row(body,'Model',$('brain-chip').textContent,button('Choose model',()=>$('brain-chip').click()));
@@ -296,4 +303,6 @@
   for(const [tool,rail]of [['eyes','rail-eyes'],['screen','rail-screen']])new MutationObserver(()=>$(rail).setAttribute('aria-pressed',$(tool).getAttribute('aria-pressed')||'false')).observe($(tool),{attributes:true,attributeFilter:['aria-pressed']});
   updateClock();setInterval(updateClock,SETTINGS.clockMs);document.body.dataset.workspace='galaxy';
   refreshSystem();setInterval(refreshSystem,SETTINGS.statusMs);applyPreferences();
+  const openLinkedWorkspace=()=>{if(window.location.hash==='#approvals')setWorkspace('work');};
+  window.addEventListener('hashchange',openLinkedWorkspace);openLinkedWorkspace();
 })();

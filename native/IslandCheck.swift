@@ -46,6 +46,19 @@ enum IslandCheck {
         state.begin(.listening, title: "Listening")
         state.update(microphoneLevel: 12)
         check(state.resolve(at: start).microphoneLevel == 1, "meter clamp")
+        check(!state.resolve(at: start).isExpanded, "listening begins compact")
+        state.transcript("", at: start)
+        check(!state.resolve(at: start.addingTimeInterval(1)).isExpanded,
+              "silence does not expand listening")
+        state.transcript("Jarvis", at: start)
+        check(!state.resolve(at: start.addingTimeInterval(0.29)).isExpanded,
+              "first words wait for expansion delay")
+        state.transcript("Jarvis test", at: start.addingTimeInterval(0.2))
+        check(state.resolve(at: start.addingTimeInterval(0.31)).isExpanded,
+              "later words do not reset expansion delay")
+        state.begin(.listening, title: "Listening")
+        check(!state.resolve(at: start.addingTimeInterval(2)).isExpanded,
+              "new listening turn resets expansion")
 
         let phrase = "Hello 👋🏽 café world"
         let source = phrase as NSString

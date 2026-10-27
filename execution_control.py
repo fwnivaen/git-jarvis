@@ -11,6 +11,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from task_limits import parse_task_limit
 
 SCHEMA_VERSION = 1
 ID_BYTES = 12
@@ -67,8 +68,11 @@ class ControlStore:
     plaintext. Restart recovery is explicit and revokes all old run generations.
     Operation results can contain selected tool data: keep this store private.
     """
-    def __init__(self, path, clock=time.time):
+    def __init__(self, path, clock=time.time, max_active=1):
         self.path, self.clock = Path(path), clock
+        # Existing optional executors retain one owner unless their trusted
+        # controller explicitly opts into a larger, bounded admission limit.
+        self.max_active = parse_task_limit(max_active)
         if self.path.is_symlink() or self.path.parent.is_symlink():
             raise ControlError('Unsafe control store.')
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -141,7 +145,7 @@ class ControlStore:
                 return self._get(row[0]), False
             if self.path.stat().st_size >= MAX_DB_BYTES:
                 raise ControlError('Control storage budget exhausted.')
-            # Queued tasks may coexist, but only one can obtain execution ownership.
+            # Queued tasks coexist; the trusted controller bounds active owners.
             now = self.clock()
             run = dict(id=identifier(), parent_run_id=None, created_at=now, expires_at=now+duration_s,
                        status='queued', generation=1, calls=0, cleanup='none', **spec)
@@ -161,7 +165,7 @@ class ControlStore:
                 if self.clock() >= run['expires_at']:
                     raise ControlError('Run expired.')
                 others = [json.loads(r[0]) for r in self.db.execute('SELECT data FROM runs WHERE id!=?', (run_id,))]
-                if any(r['status'] in {'running', 'waiting', 'cancelling'} for r in others):
+                if sum(r['status'] in {'running', 'waiting', 'cancelling'} for r in others) >= self.max_active:
                     raise ControlError('Execution capacity occupied.')
             if status == 'complete':
                 pending = [json.loads(r[0]) for r in self.db.execute('SELECT data FROM operations WHERE run_id=?', (run_id,))]

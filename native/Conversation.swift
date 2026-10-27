@@ -17,7 +17,7 @@ final class MicrophoneMeter {
         let count = min(buffer.frameLength, Conversation.meterSamples)
         guard count > 0 else { return 0 }
         var sum = 0.0
-        for index in 0..<count {
+        for index in (buffer.frameLength - count)..<buffer.frameLength {
             let sample = Double(samples[index])
             sum += sample * sample
         }
@@ -52,11 +52,13 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     var onPhase: ((Phase) -> Void)?
     private let island: IslandController
     private let synthesizer = AVSpeechSynthesizer()
+    private var activeUtterance: AVSpeechUtterance?
     private var recognizer: SFSpeechRecognizer?
     private var engine: AVAudioEngine?
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var modernCapture: ModernCapture?
+    private var captureStartup: Task<Void, Never>?
     private var networkTask: URLSessionDataTask?
     private var capturedPhrase = ""
     private var latestPhrase = ""
@@ -67,7 +69,10 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     private var spokenAnswer = ""
     private var spokenKind: IslandReplyKind = .status
     private var mutedTimer: Timer?
-    private var pendingBackground: [(text: String, at: Date)] = []
+    private var background = BackgroundDelivery()
+    private var backgroundWork: DispatchWorkItem?
+    private var deliveringBackground = false
+    var backgroundPaused: Bool { background.paused }
     private var generation = 0
 
     init(island: IslandController) {
@@ -79,6 +84,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     func pressToTalk() {
         guard phase == .idle, !buttonHeld else { return }
         buttonHeld = true
+        latestPhrase = ""
         generation += 1
         let current = generation
         phase = .preparing
@@ -122,9 +128,18 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
             return
         }
         self.voiceLock = voiceLock
-        Task { @MainActor [weak self] in
+        captureStartup = Task { @MainActor [weak self, voiceLock] in
             guard let self else { return }
-            if await ModernCapture.canUseEnglish() {
+            defer {
+                // A cancelled startup retains ownership until it has stopped,
+                // so the next turn cannot open a second audio engine.
+                withExtendedLifetime(voiceLock) {}
+                if self.generation == current { self.captureStartup = nil }
+            }
+            let modernAvailable = await ModernCapture.canUseEnglish()
+            guard !Task.isCancelled, self.generation == current,
+                  self.phase == .preparing, self.buttonHeld else { return }
+            if modernAvailable {
                 do {
                     let capture = try await ModernCapture.start(
                         onPhrase: { [weak self] phrase in
@@ -132,7 +147,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                                   self.phase == .capturing || self.phase == .finishing else { return }
                             self.latestPhrase = phrase
                             if self.phase == .capturing {
-                                self.island.update(title: phrase.isEmpty ? "Listening" : phrase)
+                                self.island.transcript(phrase)
                             }
                         },
                         onLevel: { [weak self] level in
@@ -148,7 +163,8 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                                   self.phase == .capturing || self.phase == .finishing else { return }
                             self.fail(.microphoneFailure, "On-device speech recognition stopped")
                         })
-                    guard self.generation == current, self.phase == .preparing, self.buttonHeld else {
+                    guard !Task.isCancelled, self.generation == current,
+                          self.phase == .preparing, self.buttonHeld else {
                         capture.cancel()
                         return
                     }
@@ -156,12 +172,15 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                     self.phase = .capturing
                     self.island.begin(.listening, title: "Listening")
                     return
+                } catch is CancellationError {
+                    return
                 } catch {
                     // The installed model may be temporarily unavailable; use
                     // the existing on-device recognizer for this turn.
                 }
             }
-            guard self.generation == current, self.phase == .preparing, self.buttonHeld else { return }
+            guard !Task.isCancelled, self.generation == current,
+                  self.phase == .preparing, self.buttonHeld else { return }
             self.authorizeSpeech(current)
         }
     }
@@ -212,7 +231,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                     let phrase = result.bestTranscription.formattedString
                     self.latestPhrase = phrase
                     if self.phase == .capturing {
-                        self.island.update(title: phrase.isEmpty ? "Listening" : phrase)
+                        self.island.transcript(phrase)
                     } else if self.phase == .finishing, result.isFinal {
                         self.submit(phrase)
                     }
@@ -234,9 +253,10 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         buttonHeld = false
         if phase == .preparing {
             generation += 1
+            stopCapture()
             phase = .idle
-            voiceLock = nil
             island.show(.releasedEarly, title: "Hold to speak", detail: "The microphone was still preparing")
+            scheduleBackground()
             return
         }
         guard phase == .capturing else { return }
@@ -277,6 +297,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         guard !value.isEmpty else {
             phase = .idle
             island.show(.releasedEarly, title: "I didn't catch that", detail: "Hold the keys while speaking")
+            scheduleBackground()
             return
         }
         capturedPhrase = value
@@ -322,6 +343,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         island.begin(.speaking, title: kind == .answer ? "Jarvis" : "Update", detail: answer)
         let utterance = AVSpeechUtterance(string: answer)
         utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
+        activeUtterance = utterance
         synthesizer.speak(utterance)
     }
 
@@ -353,7 +375,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
             }
             return
         }
-        guard phase == .speaking else { return }
+        guard phase == .speaking, activeUtterance === utterance else { return }
         if let index = SpokenWords.index(for: characterRange, in: utterance.speechString) {
             island.update(wordIndex: index)
         }
@@ -365,10 +387,12 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
             DispatchQueue.main.async { [weak self] in self?.speechSynthesizer(synthesizer, didFinish: utterance) }
             return
         }
-        if phase == .speaking { finishReply() }
+        if phase == .speaking, activeUtterance === utterance { finishReply() }
     }
 
     private func finishReply() {
+        activeUtterance = nil
+        deliveringBackground = false
         phase = .idle
         island.end(spokenKind, text: spokenAnswer)
         spokenAnswer = ""
@@ -378,19 +402,27 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
 
     func cancel() {
         guard phase != .idle else { return }
+        let requestWasRunning = phase == .thinking
         generation += 1
         buttonHeld = false
         mutedTimer?.invalidate()
         networkTask?.cancel()
+        activeUtterance = nil
+        deliveringBackground = false
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         stopCapture()
         phase = .idle
-        island.end(.status, text: "Cancelled")
+        island.end(.status, text: requestWasRunning ? "Reply dismissed" : "Cancelled")
+        if requestWasRunning {
+            island.notice("Reply dismissed. The request may still finish on the server.")
+        }
+        scheduleBackground()
     }
 
     func toggleMute() {
         muted.toggle()
         if phase == .speaking && muted {
+            activeUtterance = nil
             synthesizer.stopSpeaking(at: .immediate)
             phase = .mutedReply
             island.begin(.mutedReply, title: "Jarvis", detail: spokenAnswer)
@@ -402,26 +434,71 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     func toggleBackgroundSpeech() {
         backgroundSpeechEnabled.toggle()
         UserDefaults.standard.set(backgroundSpeechEnabled, forKey: "speakBackgroundUpdates")
-        if !backgroundSpeechEnabled { pendingBackground.removeAll() }
-    }
-
-    func backgroundUpdate(_ text: String) {
-        island.notice(text)
-        guard backgroundSpeechEnabled else { return }
-        pendingBackground.append((text, Date()))
+        if !backgroundSpeechEnabled { stopBackgroundSpeech() }
         scheduleBackground()
     }
 
+    func backgroundUpdate(_ text: String, id: String = UUID().uuidString) {
+        background.enqueue(id: id, text: text)
+        scheduleBackground()
+    }
+
+    func setBackgroundAvailability(sessionActive: Bool? = nil, displayAwake: Bool? = nil) {
+        if let sessionActive { background.sessionActive = sessionActive }
+        if let displayAwake { background.displayAwake = displayAwake }
+        refreshBackgroundEligibility()
+    }
+
+    func toggleBackgroundPause() {
+        background.paused.toggle()
+        UserDefaults.standard.set(background.paused, forKey: "pauseBackgroundUpdates")
+        refreshBackgroundEligibility()
+    }
+
+    func restoreBackgroundPause() {
+        background.paused = UserDefaults.standard.bool(forKey: "pauseBackgroundUpdates")
+    }
+
+    private func refreshBackgroundEligibility() {
+        backgroundWork?.cancel()
+        backgroundWork = nil
+        if !background.eligible { stopBackgroundSpeech() }
+        scheduleBackground()
+    }
+
+    private func stopBackgroundSpeech() {
+        guard deliveringBackground else { return }
+        activeUtterance = nil
+        deliveringBackground = false
+        mutedTimer?.invalidate()
+        synthesizer.stopSpeaking(at: .immediate)
+        phase = .idle
+        island.end(.status, text: "")
+        spokenAnswer = ""
+    }
+
     private func scheduleBackground() {
-        guard phase == .idle, !muted, backgroundSpeechEnabled, !pendingBackground.isEmpty else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + IslandState.doneDuration) { [weak self] in
-            guard let self, self.phase == .idle, !self.muted,
-                  self.backgroundSpeechEnabled else { return }
-            self.pendingBackground.removeAll { Date().timeIntervalSince($0.at) > IslandState.notificationExpiry }
-            guard !self.pendingBackground.isEmpty else { return }
-            let next = self.pendingBackground.removeFirst()
-            self.deliver(next.text, kind: .status)
+        background.discardExpired()
+        guard backgroundWork == nil, phase == .idle, background.eligible, !background.pending.isEmpty else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.backgroundWork = nil
+            guard self.phase == .idle, let next = self.background.next() else { return }
+            if self.backgroundSpeechEnabled && !self.muted {
+                self.deliveringBackground = true
+                self.deliver(next.text, kind: .status)
+            } else {
+                self.island.notice(next.text)
+                let nextWork = DispatchWorkItem { [weak self] in
+                    self?.backgroundWork = nil
+                    self?.scheduleBackground()
+                }
+                self.backgroundWork = nextWork
+                DispatchQueue.main.asyncAfter(deadline: .now() + IslandState.notificationDuration, execute: nextWork)
+            }
         }
+        backgroundWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + IslandState.doneDuration, execute: work)
     }
 
     private func fail(_ phase: IslandPhase, _ message: String) {
@@ -429,9 +506,12 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         stopCapture()
         self.phase = .idle
         island.show(phase, title: "Jarvis needs attention", detail: message)
+        scheduleBackground()
     }
 
     private func stopCapture() {
+        captureStartup?.cancel()
+        captureStartup = nil
         modernCapture?.cancel()
         modernCapture = nil
         if let engine {

@@ -1,5 +1,6 @@
 """Workflow HTTP integration: local metadata, explicit options and honest fallback."""
 import json
+import threading
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -13,9 +14,56 @@ ORIGIN = "http://127.0.0.1:4700"
 QUESTION = "Compare the supplied notes."
 RUN_ID = "a" * 24
 ANSWER = {"answer": "Ready.", "about_notes": False, "nodes": []}
+TEST_WAIT_S = 2
 
 
 class WorkflowHttpTests(unittest.TestCase):
+    def test_busy_model_capacity_returns_a_structured_reply_and_releases_chat(self):
+        task_slots=threading.BoundedSemaphore(2)
+        chat_slots=threading.BoundedSemaphore(1)
+        posture=dict(eyes_active=False,present=False,head_down=False,slouched=False)
+        with patch.object(server,'MODEL_SLOTS',threading.BoundedSemaphore(0)), \
+                patch.object(server,'CHAT_SLOTS',chat_slots), \
+                patch.object(server,'BRAIN_SLOTS',task_slots), \
+                patch.object(server.ultra.Settings,'read',return_value=(ultra.Settings(),None)), \
+                patch.object(server.build,'NOTES_DIR',Path(__file__).parent), \
+                patch.object(server,'retrieve',return_value=[]), \
+                patch.object(server.SENSORS,'state',return_value=posture), \
+                patch.object(server,'_ask_brain') as inference:
+            status,_,raw=request('/chat','POST',{'question':QUESTION})
+        result=json.loads(raw)
+        self.assertEqual(status,503)
+        self.assertTrue(result['error'])
+        self.assertIn('model capacity',result['answer'])
+        self.assertEqual(result['nodes'],[])
+        inference.assert_not_called()
+        self.assertTrue(chat_slots.acquire(blocking=False));chat_slots.release()
+        self.assertTrue(task_slots.acquire(blocking=False))
+        self.assertTrue(task_slots.acquire(blocking=False))
+        self.assertFalse(task_slots.acquire(blocking=False))
+        task_slots.release();task_slots.release()
+
+    def test_chat_serialization_leaves_capacity_for_another_task(self):
+        entered,release=threading.Event(),threading.Event();results=[]
+        task_slots=threading.BoundedSemaphore(2)
+        def answer(*_args,**_kwargs):
+            entered.set();self.assertTrue(release.wait(TEST_WAIT_S));return ANSWER
+        posture=dict(eyes_active=False,present=False,head_down=False,slouched=False)
+        with patch.object(server,'CHAT_SLOTS',threading.BoundedSemaphore(1)), \
+                patch.object(server,'BRAIN_SLOTS',task_slots), \
+                patch.object(server.build,'NOTES_DIR',Path(__file__).parent), \
+                patch.object(server,'retrieve',return_value=[]), \
+                patch.object(server.SENSORS,'state',return_value=posture), \
+                patch.object(server,'answer_request',side_effect=answer):
+            worker=threading.Thread(target=lambda:results.append(request('/chat','POST',{'question':QUESTION})[0]))
+            worker.start();self.assertTrue(entered.wait(TEST_WAIT_S))
+            try:
+                self.assertEqual(request('/chat','POST',{'question':'Another question'})[0],429)
+                self.assertTrue(task_slots.acquire(blocking=False));task_slots.release()
+            finally:
+                release.set();worker.join(TEST_WAIT_S)
+            self.assertEqual(results,[200]);self.assertFalse(worker.is_alive())
+
     def setUp(self):
         config = patch.object(server, "load_config", return_value=dict(TEST_CONFIG))
         config.start()

@@ -83,3 +83,7 @@ python3 preflight.py
 The benchmark and automated graph tests use isolated data and a synthetic model boundary with zero model spending. They execute the real LangGraph scheduler, SQLite persistence, JARVIS tool adapter and HTTP handlers. Full preflight uses the running local server, real model calls, and a temporary capture that it cleans up. The optional embedding check requires the downloaded model.
 
 See [evaluation and upstream comparison](framework-evaluation.md) and [recorded measurements](framework-results.json). The integrated live trials are genuine model executions; automated failure injection is labelled separately.
+
+## Candidate local controls
+
+The isolated voice/Island candidate defaults to two concurrent task owners via `TASK_MAX_CONCURRENT`, retaining shared model/tool bounds and independent cancellation/cleanup. Work previews inspect actual recipes without admission, model calls, source reads or database creation. `/stage2/tasks` adapts the same records. Completed answers offer an explicit in-memory Word download. Mission Control also displays separate durable note-edit decisions and exact-revision undo; these do not change the read-only workflow tool set. See [controls, storage and rollback](LOCAL-CONTROLS.md).

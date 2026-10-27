@@ -1,0 +1,53 @@
+# Local voice, task and note controls
+
+This describes the isolated candidate, which is not the running installation. See the [implementation record](voice-island-report.md) for checks and remaining acceptance.
+
+## Desktop voice
+
+- Hold **Control–Shift–Space** to speak from any app; release to submit.
+- **Option–Escape** cancels. Plain Escape is borrowed only during applicable active states.
+- **Option–Command–M** mutes speech; answers remain visible.
+- The **✦** menu controls the Island, local speech model, read-only permissions, optional background speech and paused background updates.
+
+The helper uses one microphone tap while explicitly listening. No continuous listener is enabled. Background notices stay in memory, expire after thirty seconds and wait behind active speech. Session-inactive and display-sleep notifications defer delivery; manual pause covers other unwanted updates. Calls, Do Not Disturb and screen sharing are not detected. Foreground tracking and Focus remain removed.
+
+## Work and previews
+
+**Preview plan** reports the actual recipe, roles, tools, budgets and private checkpoint effects. It makes no model/tool call, reads no note contents and creates no task database. **Launch workflow** is separate.
+
+`TASK_MAX_CONCURRENT` defaults to two owners, accepts integers 1–8 and falls back to one with a notice when invalid. Shared model/tool limits remain three; chat keeps one owner. Cancelled tasks retain capacity until callbacks/process cleanup settle. Failed process cleanup retries with bounded backoff while status stays responsive.
+
+The canonical `/stage2/tasks` view projects existing Work records. Work tools remain read-only. Completed answers offer **Download Word document**, creating an editable DOCX in memory only after a click.
+
+## Queued note decisions and undo
+
+1. Edit an existing note and choose **Review changes**. The original identity/revision and proposed contents enter a private queue; the note has not changed.
+2. Inspect the before/after contents and choose **Save changes**. **Not now** leaves the proposal in **Work → Note decisions**.
+3. Mission Control offers **Approve and save** or **Reject edit**. Approval expires after five minutes and binds one exact note identity, revision and proposed text.
+4. Verified saves offer **Undo this edit** for one hour. Undo refuses later independent edits and requires the exact saved revision and text.
+
+The Island shows a generic notice for actual pending proposals. **Review ↗** opens `/#approvals`, selecting Mission Control. Resolved/expired proposals clear on the next successful poll. Failed polls do not invent a resolution.
+
+Interrupted/unverified effects become uncertain and are never replayed automatically. Inspect the note before a fresh edit. These controls cover existing note edits only; preference/import compensation and general external-action approvals remain unsupported. No new model tool gains approval authority.
+
+### Storage and privacy
+
+`.local/note-actions/control.sqlite3` uses the existing private `ControlStore` and native tool journal. Its directory/database use modes 0700/0600. It contains original/proposed note text: treat it as private note data. Git and HTTP static serving exclude it. Catalog/polling return metadata; explicit local review fetches contents.
+
+Limits are eight pending proposals, sixty-four total records and a 64 MiB threshold. At capacity, new proposals are refused. There is no automatic deletion or archive UI. During approved stopped-service maintenance, preserve the whole queue directory in a private backup before starting a new one. Never remove uncertain receipts to replay actions.
+
+Decision POSTs require the local viewer origin, strict fields and an exact fingerprint. No email, publishing, purchases, deletion or other external action is exposed. The legacy approved-note route remains for compatibility.
+
+## Readiness and setup
+
+Settings/Voice offer **Refresh checks** and **View setup checks**; `/health` returns the same on-demand overview. It inspects artifacts, private file modes, supplied feature gates and tool metadata. The HTTP wrapper reads normal backend/settings locally and returns no credentials or private paths.
+
+It does not open the microphone, prompt, download models, read note contents, open databases, make model/network calls or schedule work. A bundle is not proof of a running helper, and a database header is not an integrity check. Guided acceptance, unified native/web settings, complete export, daily scheduling and battery/network policy remain separate work.
+
+## Verification and rollback
+
+`tools/check_native.sh` builds both helpers in a disposable directory. `JARVIS_DESKTOP_APP_PATH`, `JARVIS_VOICE_APP_PATH` and `JARVIS_SWIFT_MODULE_CACHE` select explicit output/cache paths. Demo, snapshot and text/layer/transition evidence modes register no hotkeys, open no microphone and call no server.
+
+The untouched original checkout/services remain the rollback baseline. Activating the new server/helper together, merging, pushing and changing login startup require approval. Both updated components must load before their shared microphone lock protects both paths. Never run two normal helpers.
+
+After approved activation, rollback stops the new helper/server, returns to the recorded previous revision without discarding work and starts the previous build. Preserve configuration, vault, checkpoints and approval journals. **Show Jarvis Island** can immediately hide the panel while preserving voice.

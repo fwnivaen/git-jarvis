@@ -19,6 +19,8 @@ let meterPublishSeconds = 0.1
 let meterRMSGain = 4.0
 let deviceUIDArgument = "--device"
 let audioDevicesArgument = "--devices"
+let voiceLockProtocolArgument = "--voice-lock-protocol"
+let voiceLockProtocol = "recording-owner-v1"
 func deviceString(_ device: AudioDeviceID, _ selector: AudioObjectPropertySelector) -> String? {
     var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     let value = UnsafeMutablePointer<CFString?>.allocate(capacity: 1)
@@ -44,6 +46,10 @@ func inputDevices() -> [(AudioDeviceID, String, String)] {
     }
 }
 let args = CommandLine.arguments
+if args.contains(voiceLockProtocolArgument) {
+    print(voiceLockProtocol)
+    exit(0)
+}
 if args.contains(audioDevicesArgument) {
     let value = inputDevices().map { ["id": $0.1, "name": $0.2] }
     if let data = try? JSONSerialization.data(withJSONObject: value), let text = String(data: data, encoding: .utf8) { print(text) }
@@ -112,7 +118,7 @@ final class SpectrumMeter {
                 "source": "native-microphone", "sample_rate": rate, "timestamp": Date().timeIntervalSince1970 * 1000]
     }
 }
-func finish() {
+@MainActor func finish() {
     engine?.stop()
     request?.endAudio()
     task?.cancel()
@@ -129,11 +135,15 @@ func startListening() {
     // Preserve the recognizer's existing echo reduction before selecting its input.
     try? input.setVoiceProcessingEnabled(true)
     if let selectedIndex = args.firstIndex(of: deviceUIDArgument), args.count > selectedIndex + 1 {
-        guard let selected = inputDevices().first(where: { $0.1 == args[selectedIndex + 1] }), let unit = input.audioUnit else {
+        guard let selected = inputDevices().first(where: { $0.1 == args[selectedIndex + 1] }) else {
             publish("error", "The selected microphone is unavailable. Choose another input and try Mic again."); return
         }
         var device = selected.0
-        guard AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr else {
+        let selectedStatus: OSStatus = input.withAudioUnit { unit in
+            guard let unit else { return kAudio_ParamError }
+            return AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
+        guard selectedStatus == noErr else {
             publish("error", "The selected microphone could not be opened. Choose the system default and try again."); return
         }
     }
@@ -146,9 +156,11 @@ func startListening() {
     session.requiresOnDeviceRecognition = true
     session.shouldReportPartialResults = true
     let meter = SpectrumMeter()
-    input.installTap(onBus: 0, bufferSize: bufferFrames, format: format) { buffer, _ in
-        session.append(buffer)
-        if let metadata = meter.measure(buffer) {
+    do {
+        try input.installAudioTap(onBus: 0, bufferSize: bufferFrames, format: format) { buffer, _ in
+        let copy = AVAudioPCMBuffer(copying: buffer)
+        session.append(copy)
+        if let metadata = meter.measure(copy) {
             DispatchQueue.main.async {
                 audioMetadata = metadata
                 if Date().timeIntervalSince(lastMeterPublish) >= meterPublishSeconds {
@@ -156,6 +168,10 @@ func startListening() {
                 }
             }
         }
+    }
+    } catch {
+        publish("error", "The Mac microphone tap could not start. Check the selected input and try Mic again.")
+        return
     }
     engine = audio
     request = session
@@ -184,7 +200,15 @@ let watchdog = Timer.scheduledTimer(withTimeInterval: pollSeconds, repeats: true
     let stopped = FileManager.default.fileExists(atPath: directory.appendingPathComponent("stop").path)
     let attributes = try? FileManager.default.attributesOfItem(atPath: heartbeat.path)
     let date = attributes?[.modificationDate] as? Date ?? .distantPast
-    if stopped || Date().timeIntervalSince(date) > leaseSeconds { finish() }
+    if stopped || Date().timeIntervalSince(date) > leaseSeconds {
+        MainActor.assumeIsolated { finish() }
+    }
+}
+// Hold ownership in the recording process, not the Python launcher. A server
+// restart must not let the desktop helper open audio before this process exits.
+guard let microphoneOwnership = VoiceLock() else {
+    publish("error", "Another Jarvis voice session is using the microphone.")
+    exit(1)
 }
 publish("permission", "Allow Microphone access for Jarvis Voice in the macOS permission dialog.")
 AVCaptureDevice.requestAccess(for: .audio) { allowed in

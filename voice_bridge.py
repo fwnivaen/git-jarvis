@@ -27,7 +27,10 @@ AUDIO_SPECTRUM_BANDS = 24
 AUDIO_RATE_HZ = 22050
 AUDIO_PRIVATE_MODE = 0o600
 AUDIO_DEVICE_ID_CHARS = 256
-VOICE_LOCK_PATH = Path(tempfile.gettempdir()) / f'jarvis-voice-owner-{os.getuid()}.lock'
+# LaunchAgents and desktop apps may receive different TMPDIR values.
+VOICE_LOCK_PATH = Path('/tmp') / f'jarvis-voice-owner-{os.getuid()}.lock'
+VOICE_LOCK_PROTOCOL = 'recording-owner-v1'
+VOICE_LOCK_PROTOCOL_ARGUMENT = '--voice-lock-protocol'
 LOCK = threading.RLock()
 SESSION = None
 AUDIO_LOCK = threading.RLock()
@@ -36,21 +39,19 @@ AUDIO_SLOTS = threading.BoundedSemaphore(AUDIO_MAX_SESSIONS)
 
 
 def acquire_voice_lock(path=VOICE_LOCK_PATH):
-    """One microphone owner across the browser bridge and the desktop helper."""
+    """Probe shared ownership; the recording helper holds its own lifetime lock."""
+    fd = None
     try:
         fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            os.close(fd)
-            return None
+            raise OSError('Unsafe voice ownership file')
         os.fchmod(fd, 0o600)
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            return None
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         return fd
     except OSError:
+        if fd is not None:
+            os.close(fd)
         return None
 
 
@@ -60,12 +61,15 @@ def release_voice_lock(fd):
         os.close(fd)
 
 
-def _release_after_exit(process, fd):
-    # Keep the cross-process lock while the native helper is still alive.
+def helper_owns_voice_lock():
+    """Do not launch an older helper that cannot enforce recording ownership."""
+    executable = APP / 'Contents' / 'MacOS' / 'JarvisVoice'
     try:
-        process.wait()
-    finally:
-        release_voice_lock(fd)
+        process = subprocess.run([str(executable), VOICE_LOCK_PROTOCOL_ARGUMENT],
+                                 capture_output=True, text=True, timeout=STOP_WAIT_S)
+        return process.returncode == 0 and process.stdout.strip() == VOICE_LOCK_PROTOCOL
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def _expire_audio():
@@ -161,12 +165,9 @@ def stop():
         try:
             state['process'].wait(timeout=STOP_WAIT_S)
         except subprocess.TimeoutExpired:
-            # The helper exits when its heartbeat disappears. Retain the lock
-            # until that actually happens, even if this HTTP request returns.
-            threading.Thread(target=_release_after_exit,
-                             args=(state['process'], state['voice_lock']), daemon=True).start()
-        else:
-            release_voice_lock(state['voice_lock'])
+            # The recording helper owns the lock until its own exit, including
+            # when it stops after this bridge's heartbeat disappears.
+            pass
         state['scratch'].cleanup()
 
 
@@ -178,15 +179,20 @@ def handle(action, token=None, device_id=None):
                 return {'status': 'error', 'text': 'The selected microphone identifier is invalid.'}
             if not APP.is_dir():
                 return {'status': 'error', 'text': 'The Mac voice helper needs to be built. Run native/build_voice.sh in the Jarvis folder.'}
+            if not helper_owns_voice_lock():
+                return {'status': 'error', 'text': 'The Mac voice helper needs a microphone ownership update. Run native/build_voice.sh in the Jarvis folder.'}
             if SESSION:
                 return {'status': 'error', 'text': 'Another Jarvis tab is using the Mac microphone. Turn its Mic off first.'}
             voice_lock = acquire_voice_lock()
             if voice_lock is None:
                 return {'status': 'error', 'text': 'Another Jarvis voice session is using the microphone.'}
+            # This is only a fast availability check. The launched helper must
+            # acquire ownership itself before requesting or opening audio, so
+            # ownership survives this server exiting or being killed.
+            release_voice_lock(voice_lock)
             try:
                 scratch = tempfile.TemporaryDirectory(prefix='jarvis-voice-')
             except OSError:
-                release_voice_lock(voice_lock)
                 return {'status': 'error', 'text': 'The Mac voice helper could not prepare a private session.'}
             folder = Path(scratch.name)
             try:
@@ -198,11 +204,9 @@ def handle(action, token=None, device_id=None):
                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except OSError:
                 scratch.cleanup()
-                release_voice_lock(voice_lock)
                 return {'status': 'error', 'text': 'The Mac voice helper could not start.'}
             token = secrets.token_hex(SESSION_TOKEN_BYTES)
-            SESSION = dict(token=token, scratch=scratch, process=process,
-                           voice_lock=voice_lock, touched=time.monotonic())
+            SESSION = dict(token=token, scratch=scratch, process=process, touched=time.monotonic())
             return {'token': token, 'status': 'starting'}
         if not SESSION or not isinstance(token, str) or not secrets.compare_digest(token, SESSION['token']):
             return {'status': 'error', 'text': 'The microphone session ended. Click Mic to retry.'}

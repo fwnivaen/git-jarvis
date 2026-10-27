@@ -43,8 +43,9 @@ class BridgeError(Exception):
 
 
 class CodexBridge:
-    def __init__(self, executable, disabled_features=(), overrides=()):
+    def __init__(self, executable, disabled_features=(), overrides=(), model_slots=None):
         self.executable = executable
+        self.model_slots = model_slots
         # The installed app-server routes dynamicTools through its tool host.
         # The code-mode model tool itself remains disabled; only our allowlist is registered.
         self.disabled_features = tuple(feature for feature in disabled_features if feature != "code_mode_host")
@@ -54,6 +55,8 @@ class CodexBridge:
         self._lock = threading.RLock()
         self._write_lock = threading.Lock()
         self._process = None
+        self._cleanup_pending = False
+        self._retained_model_slots = 0
         self._scratch = None
         self._pending = {}
         self._calls = {}
@@ -217,6 +220,8 @@ class CodexBridge:
 
     def start(self, deadline):
         with self._start_lock:
+            if self._cleanup_pending:
+                self.close()
             if self._process is not None and self._process.poll() is None:
                 return
             self.close()
@@ -309,6 +314,39 @@ class CodexBridge:
 
     def complete(self, *, model, effort, system, payload, schema, deadline, observer, image=None,
                  tools=None, tool_handler=None, cancel_event=None):
+        slots = getattr(self, 'model_slots', None)
+        if slots is not None:
+            # A previous failed termination can own every shared slot. Retry
+            # cleanup before waiting for capacity that only cleanup can free.
+            if self._cleanup_pending:
+                self.close()
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise BridgeError('cancelled')
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BridgeError('timeout')
+                if slots.acquire(timeout=min(remaining, CANCEL_POLL_S)):
+                    break
+        try:
+            return self._complete(model=model, effort=effort, system=system, payload=payload,
+                schema=schema, deadline=deadline, observer=observer, image=image,
+                tools=tools, tool_handler=tool_handler, cancel_event=cancel_event)
+        finally:
+            if slots is not None:
+                # An unconfirmed interrupt/termination may still be using the
+                # model. Keep one token for each such in-flight call until a
+                # closer confirms the process exited. Use the same lock as
+                # close so concurrent workers cannot miss or double-release it.
+                with self._lock:
+                    retained = self._cleanup_pending and self._process is not None
+                    if retained:
+                        self._retained_model_slots += 1
+                if not retained:
+                    slots.release()
+
+    def _complete(self, *, model, effort, system, payload, schema, deadline, observer, image=None,
+                  tools=None, tool_handler=None, cancel_event=None):
         def receive(channel):
             while True:
                 if self._usage_revoked:
@@ -463,27 +501,52 @@ class CodexBridge:
                     pass
 
     def close(self):
-        with self._lock:
-            process, self._process = self._process, None
-            scratch, self._scratch = self._scratch, None
-            self._models = {}
-        if process:
-            self._fail_calls()
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=SHUTDOWN_TIMEOUT_S)
-            except subprocess.TimeoutExpired:
+        # Serialize against start and other closers. A failed termination keeps
+        # the process and scratch references available for a later retry.
+        with self._start_lock:
+            with self._lock:
+                process, scratch = self._process, self._scratch
+                self._models = {}
+                self._cleanup_pending = process is not None or scratch is not None
+            if process:
+                self._fail_calls()
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=SHUTDOWN_TIMEOUT_S)
-            except (ProcessLookupError, PermissionError):
-                pass
-            for handle in (process.stdin, process.stdout):
-                try:
-                    handle.close()
-                except (OSError, ValueError):
-                    pass
-        if scratch:
-            scratch.cleanup()
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                        try:
+                            process.wait(timeout=SHUTDOWN_TIMEOUT_S)
+                        except subprocess.TimeoutExpired:
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait(timeout=SHUTDOWN_TIMEOUT_S)
+                except (OSError, subprocess.TimeoutExpired):
+                    if process.poll() is None:
+                        raise BridgeError("unavailable") from None
+                if process.poll() is None:
+                    raise BridgeError("unavailable")
+                for handle in (process.stdin, process.stdout):
+                    try:
+                        handle.close()
+                    except (OSError, ValueError):
+                        pass
+                with self._lock:
+                    if self._process is process:
+                        self._process = None
+            with self._lock:
+                retained = self._retained_model_slots
+                self._retained_model_slots = 0
+            # A confirmed process exit frees model capacity even if removing
+            # its private scratch directory subsequently needs another retry.
+            for _ in range(retained):
+                self.model_slots.release()
+            if scratch:
+                scratch.cleanup()
+                with self._lock:
+                    if self._scratch is scratch:
+                        self._scratch = None
+            self._cleanup_pending = False

@@ -7,6 +7,12 @@ enum OrbDesign {
     static let expandedRestFPS = 30
     static let compactRestFPS = 24
     static let transitionHold: TimeInterval = 0.6
+
+    static func framesPerSecond(expanded: Bool, hovering: Bool, transitioning: Bool) -> Int {
+        if hovering || transitioning { return transitionFPS }
+        return expanded ? expandedRestFPS : compactRestFPS
+    }
+
     static let shader = """
     #include <metal_stdlib>
     using namespace metal;
@@ -44,6 +50,7 @@ final class OrbRenderer: NSObject, MTKViewDelegate {
     private var phase: IslandPhase = .ready
     private var level = 0.0
     private var expanded = false
+    private var hovering = false
 
     struct Uniforms {
         var time: Float
@@ -73,27 +80,32 @@ final class OrbRenderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
-    func update(phase: IslandPhase, level: Double, expanded: Bool, view: MTKView) {
-        if self.phase != phase {
+    func update(phase: IslandPhase, level: Double, expanded: Bool,
+                hovering: Bool = false, view: MTKView) {
+        if self.phase != phase || self.expanded != expanded || self.hovering != hovering {
             self.phase = phase
             transitionUntil = Date().addingTimeInterval(OrbDesign.transitionHold)
         }
         self.level = level
         self.expanded = expanded
-        view.preferredFramesPerSecond = Date() < transitionUntil ? OrbDesign.transitionFPS :
-            expanded ? OrbDesign.expandedRestFPS : OrbDesign.compactRestFPS
+        self.hovering = hovering
+        refreshFrameRate(view)
+    }
+
+    private func refreshFrameRate(_ view: MTKView) {
+        let target = OrbDesign.framesPerSecond(expanded: expanded, hovering: hovering,
+                                              transitioning: Date() < transitionUntil)
+        if view.preferredFramesPerSecond != target { view.preferredFramesPerSecond = target }
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
+        refreshFrameRate(view)
         guard let descriptor = view.currentRenderPassDescriptor,
               let drawable = view.currentDrawable,
               let buffer = commandQueue.makeCommandBuffer(),
               let encoder = buffer.makeRenderCommandEncoder(descriptor: descriptor) else { return }
-        if Date() >= transitionUntil {
-            view.preferredFramesPerSecond = expanded ? OrbDesign.expandedRestFPS : OrbDesign.compactRestFPS
-        }
         let tint: SIMD4<Float>
         switch phase {
         case .thinking, .working: tint = SIMD4(0.604, 0.549, 1, 1)
@@ -115,39 +127,81 @@ final class OrbRenderer: NSObject, MTKViewDelegate {
     }
 }
 
+private final class TransparentOrbMetalView: MTKView {
+    override var isOpaque: Bool { false }
+}
+
+// The hosting view owns either a working renderer or the Canvas fallback.
+// Selecting the fallback here also covers shader and pipeline failures after
+// Metal device discovery has succeeded.
+final class OrbHostView: NSView {
+    private(set) var renderer: OrbRenderer?
+    private(set) var metalView: MTKView?
+    private(set) var fallbackView: NSHostingView<MiniOrb>?
+
+    init(frame: NSRect, phase: IslandPhase, level: Double, size: CGFloat,
+         expanded: Bool, hovering: Bool,
+         rendererFactory: (MTKView) -> OrbRenderer? = { OrbRenderer(view: $0) }) {
+        super.init(frame: frame)
+        let metal = TransparentOrbMetalView(frame: bounds, device: MTLCreateSystemDefaultDevice())
+        metal.colorPixelFormat = .bgra8Unorm
+        metal.clearColor = MTLClearColorMake(0, 0, 0, 0)
+        metal.framebufferOnly = true
+        metal.enableSetNeedsDisplay = false
+        metal.autoresizingMask = [.width, .height]
+        if let renderer = rendererFactory(metal) {
+            self.renderer = renderer
+            metalView = metal
+            metal.delegate = renderer
+            metal.isPaused = false
+            addSubview(metal)
+        } else {
+            metal.isPaused = true
+            let fallback = NSHostingView(rootView: MiniOrb(phase: phase, level: level, size: size))
+            fallback.frame = bounds
+            fallback.autoresizingMask = [.width, .height]
+            fallbackView = fallback
+            addSubview(fallback)
+        }
+        update(phase: phase, level: level, size: size, expanded: expanded, hovering: hovering)
+    }
+
+    required init?(coder: NSCoder) { return nil }
+
+    func update(phase: IslandPhase, level: Double, size: CGFloat,
+                expanded: Bool, hovering: Bool) {
+        if let metalView {
+            renderer?.update(phase: phase, level: level, expanded: expanded,
+                             hovering: hovering, view: metalView)
+        } else {
+            fallbackView?.rootView = MiniOrb(phase: phase, level: level, size: size)
+        }
+    }
+
+    func stop() {
+        metalView?.isPaused = true
+        metalView?.delegate = nil
+        renderer = nil
+    }
+}
+
 struct MetalOrb: NSViewRepresentable {
     let phase: IslandPhase
     let level: Double
     let size: CGFloat
     let expanded: Bool
+    let hovering: Bool
 
-    final class Coordinator { var renderer: OrbRenderer? }
-    final class TransparentMTKView: MTKView { override var isOpaque: Bool { false } }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> MTKView {
-        let view = TransparentMTKView(frame: NSRect(x: 0, y: 0, width: size, height: size),
-                           device: MTLCreateSystemDefaultDevice())
-        view.colorPixelFormat = .bgra8Unorm
-        view.clearColor = MTLClearColorMake(0, 0, 0, 0)
-        view.framebufferOnly = true
-        view.enableSetNeedsDisplay = false
-        view.isPaused = false
-        let renderer = OrbRenderer(view: view)
-        context.coordinator.renderer = renderer
-        view.delegate = renderer
-        renderer?.update(phase: phase, level: level, expanded: expanded, view: view)
-        return view
+    func makeNSView(context: Context) -> OrbHostView {
+        OrbHostView(frame: NSRect(x: 0, y: 0, width: size, height: size),
+                    phase: phase, level: level, size: size, expanded: expanded, hovering: hovering)
     }
 
-    func updateNSView(_ view: MTKView, context: Context) {
-        context.coordinator.renderer?.update(phase: phase, level: level,
-                                             expanded: expanded, view: view)
+    func updateNSView(_ view: OrbHostView, context: Context) {
+        view.update(phase: phase, level: level, size: size, expanded: expanded, hovering: hovering)
     }
 
-    static func dismantleNSView(_ view: MTKView, coordinator: Coordinator) {
-        view.isPaused = true
-        view.delegate = nil
-        coordinator.renderer = nil
+    static func dismantleNSView(_ view: OrbHostView, coordinator: ()) {
+        view.stop()
     }
 }

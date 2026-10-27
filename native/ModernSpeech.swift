@@ -66,14 +66,23 @@ final class ModernCapture: @unchecked Sendable {
                       onLevel: @escaping (Double) -> Void,
                       onFinished: @escaping (String) -> Void,
                       onError: @escaping () -> Void) async throws -> ModernCapture {
+        try Task.checkCancellation()
         let transcriber = SpeechTranscriber(locale: locale,
                                             transcriptionOptions: [],
                                             reportingOptions: [.volatileResults],
                                             attributeOptions: [])
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         let converter = try await AnalyzerInputConverter.converter(compatibleWith: [transcriber])
+        try Task.checkCancellation()
         let (stream, continuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
-        try await analyzer.start(inputSequence: stream)
+        do {
+            try await analyzer.start(inputSequence: stream)
+            try Task.checkCancellation()
+        } catch {
+            continuation.finish()
+            await analyzer.cancelAndFinishNow()
+            throw error
+        }
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -100,6 +109,7 @@ final class ModernCapture: @unchecked Sendable {
                                     onPhrase: onPhrase, onLevel: onLevel,
                                     onFinished: onFinished, onError: onError)
         do {
+            try Task.checkCancellation()
             try input.installAudioTap(onBus: 0, bufferSize: bufferFrames, format: format) { [weak capture] buffer, time in
                 guard let capture else { return }
                 let copy = CopiedPCM(buffer: AVAudioPCMBuffer(copying: buffer))
@@ -115,7 +125,9 @@ final class ModernCapture: @unchecked Sendable {
                 }
             }
             capture.tapInstalled = true
+            try Task.checkCancellation()
             try engine.start()
+            try Task.checkCancellation()
             return capture
         } catch {
             capture.cancel()

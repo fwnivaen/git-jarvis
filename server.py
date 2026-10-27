@@ -61,6 +61,7 @@ import re
 import secrets
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -83,6 +84,13 @@ import ultra_memory
 import ultra_documents
 import ultra_tools
 import workflow_runtime
+import task_limits
+import task_api
+import task_status
+import local_clock
+import document_export
+import note_actions
+import health_readiness
 import usage_policy
 WATCH = watch.Watch()
 SENSORS = sensor_state.Sensors()
@@ -126,7 +134,9 @@ HISTORY_WEIGHT = 0.3
 HISTORY_TURNS = 4
 MAX_SESSIONS = 64
 SESSION_TTL_S = 3_600
-MAX_PARALLEL_BRAINS = 1
+MAX_PARALLEL_BRAINS = task_limits.TASK_MAX_CONCURRENT
+MAX_PARALLEL_CHATS = 1
+MAX_PARALLEL_MODEL_CALLS = 3
 TIME_PRECISION = 2
 MIN_WORD_CHARS = 2
 PRIVATE_FILE_MODE = 0o600
@@ -137,6 +147,7 @@ UI_ASSETS = {
     "ultra-ui.js": "text/javascript",
     "agents.js": "text/javascript", "agents.css": "text/css",
     "workflows.js": "text/javascript", "workflows.css": "text/css",
+    "local-services.js": "text/javascript",
     "theme.js": "text/javascript", "ui.js": "text/javascript",
     "tokens.css": "text/css", "app.css": "text/css", "open-deck.css": "text/css",
     "Inter.woff2": "font/woff2", "JetBrainsMono.woff2": "font/woff2",
@@ -240,11 +251,14 @@ NOTES = []
 SESSIONS = {}
 SESSION_LOCK = threading.Lock()
 BRAIN_SLOTS = threading.BoundedSemaphore(MAX_PARALLEL_BRAINS)
+CHAT_SLOTS = threading.BoundedSemaphore(MAX_PARALLEL_CHATS)
+MODEL_SLOTS = threading.BoundedSemaphore(MAX_PARALLEL_MODEL_CALLS)
 PREFLIGHT_CAPTURES = {}
 PREFLIGHT_CLOSED = {}
 ULTRA_CONFIG_PATH = ROOT / "ultra.json"
 ULTRA = ultra.UltraJarvis(lambda: ultra.CodexBridge(find_codex(), DISABLED_FEATURES,
-    tuple(value for value in CLI_OVERRIDES if not value.startswith("model_reasoning_effort="))))
+    tuple(value for value in CLI_OVERRIDES if not value.startswith("model_reasoning_effort=")),
+    model_slots=MODEL_SLOTS))
 CODEX_USAGE = ultra.CodexBridge(None, DISABLED_FEATURES, CLI_OVERRIDES)
 
 
@@ -635,6 +649,16 @@ def cli_command(executable, model, workspace, schema_path, answer_path):
 
 
 def ask_brain(system, notes, history, question, image=None, webcam=False):
+    if not MODEL_SLOTS.acquire(blocking=False):
+        return {"answer": "Jarvis is using its available model capacity. Please try again shortly.",
+                "nodes": [], "about_notes": False, "error": True}
+    try:
+        return _ask_brain(system, notes, history, question, image=image, webcam=webcam)
+    finally:
+        MODEL_SLOTS.release()
+
+
+def _ask_brain(system, notes, history, question, image=None, webcam=False):
     """One boundary for all backends, with a consistent per-request model snapshot."""
     started = time.monotonic()
     backend = "unavailable"
@@ -941,6 +965,56 @@ WORKFLOWS = workflow_runtime.WorkflowService(ultra_settings, TOOLS, ULTRA.bridge
     BRAIN_SLOTS, SYSTEM_PROMPT)
 
 WORKFLOWS.source_resolver = resolve_workflow_source
+TASK_API = task_api.TaskAPI(WORKFLOWS)
+NOTE_ACTIONS = None
+NOTE_ACTION_LOCK = threading.RLock()
+NOTE_ACTION_PATH = ROOT / '.local' / 'note-actions' / 'control.sqlite3'
+
+
+def read_action_note(identifier):
+    # Review must use the full editor text, not the model tool's truncated excerpt.
+    with INDEX_LOCK:
+        note = next(note for note in NOTES if note['id'] == identifier)
+        return note_store.read(note, build.NOTES_DIR)
+
+
+def write_action_note(arguments, operation_session):
+    return current_native_result(native_tool_routes.invoke('note_write', arguments,
+        native_note_write, properties={'id': ultra_tools.INTEGER, 'text': ultra_tools.STRING,
+            'revision': ultra_tools.STRING}, body={'operation_session': operation_session},
+        duration_s=BRAIN_TIMEOUT_S))
+
+
+def note_actions_service(create=False):
+    global NOTE_ACTIONS
+    with NOTE_ACTION_LOCK:
+        if NOTE_ACTIONS is None and (create or NOTE_ACTION_PATH.exists()):
+            NOTE_ACTIONS = note_actions.NoteActions(NOTE_ACTION_PATH, read_action_note, write_action_note)
+        return NOTE_ACTIONS
+
+
+def note_action_catalog():
+    service = note_actions_service()
+    return service.catalog() if service else {'items': [], 'pending_count': 0,
+        'capabilities': {'note_write': True, 'exact_revision_undo': True, 'external_actions': False},
+        'limitations': list(note_actions.LIMITATIONS)}
+
+
+def readiness_snapshot():
+    # Missing/private config never prevents the setup page from explaining readiness.
+    backend = None
+    try:
+        backend = active_settings()['brain']
+    except (ValueError, OSError, BrainError):
+        pass
+    settings, notice = ultra.Settings.read(ULTRA_CONFIG_PATH)
+    gate_names = health_readiness.GATE_NAMES
+    value = health_readiness.snapshot(ROOT, server_running=True, backend=backend,
+        gates={name: getattr(settings, name) for name in gate_names}, settings_notice=notice,
+        answer_schema=ANSWER_SCHEMA, codex_path=find_codex(), workflow_root=WORKFLOWS.root)
+    value['side_effects']['config_reads'] = True
+    value['side_effects']['settings_reads'] = True
+    return value
 
 class GalaxyServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -962,10 +1036,12 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         return host in allowed and (origin is None or origin == "http://" + host)
 
-    def send_bytes(self, data, content_type, status=200, cookie=None, head=False):
+    def send_bytes(self, data, content_type, status=200, cookie=None, head=False, attachment=None):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
+        if attachment:
+            self.send_header("Content-Disposition", 'attachment; filename="' + attachment + '"')
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -990,7 +1066,46 @@ class Handler(BaseHTTPRequestHandler):
         if not self.local_request():
             self.send_json({"answer": "Local requests only.", "nodes": []}, 403)
             return
+        path = urllib.parse.urlparse(self.path).path
+        if path == '/health':
+            try:
+                self.send_bytes(json.dumps(readiness_snapshot()).encode(), 'application/json', head=head)
+            except (ValueError, OSError):
+                self.send_json({'error': True, 'answer': 'Readiness could not be checked. No setup changes were made.'}, 503)
+            return
+        if path == '/approvals':
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                identifier = query.get('id', [None])[0]
+                if identifier is None:
+                    value = note_action_catalog()
+                else:
+                    service = note_actions_service()
+                    if service is None:
+                        raise note_actions.NoteActionError('Unknown note action.', 404)
+                    value = service.get(identifier)
+                self.send_bytes(json.dumps(value).encode(), 'application/json', head=head)
+            except note_actions.NoteActionError as error:
+                self.send_json({'error': True, 'answer': str(error)}, error.status)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({'error': True, 'answer': 'The private note decision store is unavailable.'}, 503)
+            return
         path = urllib.parse.urlsplit(self.path).path
+        if path in ("/stage2/tasks", "/stage2/tasks/task"):
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                value = TASK_API.catalog() if path == "/stage2/tasks" else TASK_API.detail(query.get("id", [""])[0])
+                if path == '/stage2/tasks':
+                    approvals = note_action_catalog()
+                    value['note_actions'] = {'pending_count': approvals['pending_count'],
+                        'items': [{'id': item['id'], 'status': item['status']} for item in approvals['items']
+                            if item['status'] == 'pending']}
+                self.send_bytes(json.dumps(value).encode(), "application/json", head=head)
+            except workflow_runtime.WorkflowError as error:
+                self.send_json({"error": True, "answer": str(error)}, error.status)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({'error': True, 'answer': 'Task or note decision status is unavailable.'}, 503)
+            return
         if path in ("/workflows", "/workflows/run", "/workflows/events"):
             try:
                 if path == "/workflows":
@@ -1124,7 +1239,7 @@ class Handler(BaseHTTPRequestHandler):
             WORKFLOWS.stream_slots.release()
 
     def do_POST(self):
-        if self.path not in ("/workflows/start", "/workflows/cancel", "/workflows/retry", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
+        if self.path not in ("/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
             self.send_json({"answer": "Not found.", "nodes": []}, 404)
             return
         if not self.local_request():
@@ -1135,9 +1250,56 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= (MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path == "/note" else MAX_VOICE_REQUEST_BYTES if self.path == "/voice/render" else MAX_REQUEST_BYTES):
+            if not 0 < length <= (document_export.MAX_REQUEST_BYTES if self.path == "/export/word" else MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path in ("/note", "/approvals/propose") else MAX_VOICE_REQUEST_BYTES if self.path == "/voice/render" else MAX_REQUEST_BYTES):
                 raise ValueError
             body = json.loads(self.rfile.read(length))
+            if self.path.startswith('/approvals/'):
+                if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
+                    self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)
+                    return
+                try:
+                    allowed = {'id', 'text', 'revision', 'request_key'} if self.path == '/approvals/propose' else {'id', 'fingerprint', 'decision'} if self.path == '/approvals/decide' else {'id', 'fingerprint'}
+                    if not isinstance(body, dict) or set(body) - allowed:
+                        raise note_actions.NoteActionError('Send only the fields for this note decision.', 400)
+                    service = note_actions_service(create=self.path == '/approvals/propose')
+                    if service is None:
+                        raise note_actions.NoteActionError('Unknown note action.', 404)
+                    if self.path == '/approvals/propose':
+                        result = service.propose(body.get('id'), body.get('text'), body.get('revision'), body.get('request_key'))
+                    elif self.path == '/approvals/decide':
+                        result = service.decide(body.get('id'), body.get('fingerprint'), body.get('decision'))
+                    else:
+                        result = service.undo(body.get('id'), body.get('fingerprint'))
+                    self.send_json(result)
+                except note_actions.NoteActionError as error:
+                    self.send_json({'error': True, 'answer': str(error)}, error.status)
+                except (ValueError, OSError, sqlite3.Error):
+                    self.send_json({'error': True, 'answer': 'The note decision could not be confirmed. Inspect the note before retrying.'}, 503)
+                return
+            if self.path == "/export/word":
+                if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
+                    self.send_json({"error": True, "answer": "Local viewer requests only."}, 403)
+                    return
+                try:
+                    if not isinstance(body, dict) or set(body) != {"title", "text"}:
+                        raise ValueError("Supply a title and answer only.")
+                    output = document_export.word_document(body["title"], body["text"])
+                except ValueError as error:
+                    self.send_json({"error": True, "answer": str(error)}, 400)
+                    return
+                self.send_bytes(output, document_export.CONTENT_TYPE, attachment="Jarvis answer.docx")
+                return
+            if self.path == "/stage2/tasks/plan":
+                if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
+                    self.send_json({"error": True, "answer": "Local viewer requests only."}, 403)
+                    return
+                try:
+                    if not isinstance(body, dict) or set(body) - {"question", "workflow"}:
+                        raise workflow_runtime.WorkflowError("Send a question and known workflow only.")
+                    self.send_json(TASK_API.plan(body.get("question"), body.get("workflow", "research")))
+                except workflow_runtime.WorkflowError as error:
+                    self.send_json({"error": True, "answer": str(error)}, error.status)
+                return
             if self.path in ("/workflows/start", "/workflows/cancel", "/workflows/retry"):
                 if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
                     self.send_json({"error": True, "answer": "Local viewer requests only."}, 403)
@@ -1268,6 +1430,11 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, binascii.Error, AttributeError, UnicodeDecodeError, TimeoutError):
             self.send_json({"answer": "Send a fresh JPEG frame with image/jpeg and a short question, sir." if self.path in ("/see", "/look") else "Please send a short, nonempty question.", "nodes": []}, 400)
             return
+        if self.path == "/chat" and not body.get("workflow") and not body.get("resume_run"):
+            clock_reply = local_clock.answer(question) or task_status.answer(question, TASK_API)
+            if clock_reply is not None:
+                self.send_json(clock_reply)
+                return
         if self.path == "/model" or (self.path in ("/chat", "/see") and is_model_command(question)):
             try:
                 result = swap_model(question)
@@ -1297,8 +1464,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"answer": "I couldn't complete that capture, sir. Please check your notes before retrying.",
                                 "nodes": [], "error": True}, 500)
             return
-        if not BRAIN_SLOTS.acquire(blocking=False):
+        if not CHAT_SLOTS.acquire(blocking=False):
             self.send_json({"answer": "I'm answering another question. Please try again in a moment.", "nodes": []}, 429)
+            return
+        if not BRAIN_SLOTS.acquire(blocking=False):
+            CHAT_SLOTS.release()
+            self.send_json({"answer": "Jarvis has reached its task limit. Wait for a task to finish or cancel one.", "nodes": []}, 429)
             return
         try:
             if self.path == "/chat" and not build.NOTES_DIR.is_dir():
@@ -1345,6 +1516,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(result, 503 if result.get("error") else 200, cookie=sid)
         finally:
             BRAIN_SLOTS.release()
+            CHAT_SLOTS.release()
 
 
 def main():
@@ -1373,6 +1545,8 @@ def main():
         print("\nJarvis stopped.")
     finally:
         WORKFLOWS.close()
+        if NOTE_ACTIONS is not None:
+            NOTE_ACTIONS.close()
         ULTRA.close()
         CODEX_USAGE.close()
         MEMORY.close()

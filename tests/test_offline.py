@@ -395,7 +395,7 @@ class Preflight(unittest.TestCase):
         from unittest.mock import MagicMock
         process = MagicMock()
         process.poll.return_value = None
-        with patch.object(voice_bridge, 'SESSION', None), patch.object(voice_bridge, 'APP', Path(self.scratch.name)), patch.object(voice_bridge.subprocess, 'Popen', return_value=process):
+        with patch.object(voice_bridge, 'SESSION', None), patch.object(voice_bridge, 'APP', Path(self.scratch.name)), patch.object(voice_bridge, 'helper_owns_voice_lock', return_value=True), patch.object(voice_bridge.subprocess, 'Popen', return_value=process):
             try:
                 state = voice_bridge.handle('start')
                 folder = Path(voice_bridge.SESSION['scratch'].name)

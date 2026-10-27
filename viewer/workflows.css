@@ -1,4 +1,6 @@
 .workflow-console{--wf-gap:18px;--wf-history:210px;--wf-radius:14px;--wf-card-min:220px;--wf-event-height:240px;color:var(--text-primary);margin:0 0 32px;padding:24px;border:1px solid var(--stroke-default);border-radius:20px;background:var(--surface-2)}
+.local-service{--local-section-gap:32px;--local-preview-height:240px;margin-block:var(--local-section-gap)}
+.local-service pre,.approval-card pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:var(--local-preview-height,240px);overflow:auto}
 .workflow-header,.workflow-run-heading,.workflow-agent-heading,.workflow-controls{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .workflow-header h2{margin:4px 0 18px;font-size:24px}.workflow-eyebrow{font:10px var(--mono);letter-spacing:.16em;color:var(--accent);margin:0}
 .workflow-engine,.workflow-state{font:10px var(--mono);border:1px solid var(--stroke-default);border-radius:20px;padding:6px 10px;white-space:nowrap;color:var(--text-secondary)}

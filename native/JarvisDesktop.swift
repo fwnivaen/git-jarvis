@@ -6,6 +6,22 @@ import OSLog
 import Speech
 
 enum VoicePermissions {
+    struct Status {
+        let microphone: String
+        let speech: String
+        let ready: Bool
+        var detail: String { "Microphone: \(microphone) · Speech: \(speech)" }
+    }
+
+    static func current() async -> Status {
+        let modernReady = await ModernCapture.canUseEnglish()
+        let microphone = Self.microphone
+        let legacySpeech = Self.speech
+        return Status(microphone: microphone,
+                      speech: modernReady ? "on-device model ready" : legacySpeech,
+                      ready: microphone == "allowed" && (modernReady || legacySpeech == "allowed"))
+    }
+
     static var microphone: String {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return "allowed"
@@ -34,19 +50,26 @@ enum LaunchMode {
 final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     private let diagnostics = Logger(subsystem: "local.fwnivaen.jarvis.desktop", category: "voice")
     private let mode: LaunchMode
-    private let island = IslandController()
+    private let island: IslandController
     private var conversation: Conversation!
     private var hotkeys: Hotkeys?
     private var statusItem: NSStatusItem?
     private var listenItem: NSMenuItem?
     private var muteItem: NSMenuItem?
     private var backgroundSpeechItem: NSMenuItem?
+    private var backgroundPauseItem: NSMenuItem?
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var islandItem: NSMenuItem?
     private var askStarted = false
     private var taskWatcher: TaskWatcher?
     private let speechModelInstaller = SpeechModelInstaller()
 
-    init(mode: LaunchMode) { self.mode = mode }
+    init(mode: LaunchMode) {
+        self.mode = mode
+        if case .demo = mode { island = IslandController(announcementsEnabled: false) }
+        else { island = IslandController() }
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         conversation = Conversation(island: island)
@@ -67,14 +90,17 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         }
         switch mode {
         case .normal:
+            conversation.restoreBackgroundPause()
             installMenu()
+            observeDeliveryAvailability()
             let watcher = TaskWatcher()
             watcher.onUpdate = { [weak self] update in
-                self?.conversation.backgroundUpdate(update.summary)
+                self?.conversation.backgroundUpdate(update.summary, id: update.id + ":" + update.status)
             }
             watcher.onActivity = { [weak self] active in
                 self?.island.backgroundWork(active)
             }
+            watcher.onApproval = { [weak self] title in self?.island.approval(title) }
             watcher.start()
             taskWatcher = watcher
             let keys = Hotkeys()
@@ -83,8 +109,10 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                 self.diagnostics.notice("Hotkey pressed: \(id, privacy: .public)")
                 switch id {
                 case Hotkeys.pushToTalk:
-                    ReadySound.play()
-                    self.conversation.pressToTalk()
+                    if self.conversation.phase == .idle {
+                        ReadySound.play()
+                        self.conversation.pressToTalk()
+                    }
                 case Hotkeys.cancel, Hotkeys.plainEscape: self.conversation.cancel()
                 case Hotkeys.mute: self.toggleMute()
                 default: break
@@ -144,6 +172,12 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         backgroundSpeech.state = conversation.backgroundSpeechEnabled ? .on : .off
         menu.addItem(backgroundSpeech)
         backgroundSpeechItem = backgroundSpeech
+        let pause = NSMenuItem(title: "Pause background updates",
+                               action: #selector(toggleBackgroundPause), keyEquivalent: "")
+        pause.target = self
+        pause.state = conversation.backgroundPaused ? .on : .off
+        menu.addItem(pause)
+        backgroundPauseItem = pause
         let show = NSMenuItem(title: "Show Jarvis Island", action: #selector(toggleIsland), keyEquivalent: "")
         show.target = self
         show.state = island.enabled ? .on : .off
@@ -201,6 +235,24 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         conversation.toggleBackgroundSpeech()
         backgroundSpeechItem?.state = conversation.backgroundSpeechEnabled ? .on : .off
     }
+    @objc private func toggleBackgroundPause() {
+        conversation.toggleBackgroundPause()
+        backgroundPauseItem?.state = conversation.backgroundPaused ? .on : .off
+    }
+    private func observeDeliveryAvailability() {
+        let center = NSWorkspace.shared.notificationCenter
+        let signals: [(Notification.Name, Bool?, Bool?)] = [
+            (NSWorkspace.sessionDidResignActiveNotification, false, nil),
+            (NSWorkspace.sessionDidBecomeActiveNotification, true, nil),
+            (NSWorkspace.screensDidSleepNotification, nil, false),
+            (NSWorkspace.screensDidWakeNotification, nil, true),
+        ]
+        workspaceObservers = signals.map { name, sessionActive, displayAwake in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.conversation.setBackgroundAvailability(sessionActive: sessionActive, displayAwake: displayAwake)
+            }
+        }
+    }
     @objc private func toggleIsland() {
         island.enabled.toggle()
         islandItem?.state = island.enabled ? .on : .off
@@ -208,13 +260,14 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func installSpeechModel() { speechModelInstaller.install(island: island) }
     @objc private func checkPermissions() {
-        let microphone = VoicePermissions.microphone
-        let speech = VoicePermissions.speech
-        let detail = "Microphone: \(microphone) · Speech: \(speech)"
-        if microphone == "allowed" && speech == "allowed" {
-            island.notice(detail)
-        } else {
-            island.show(.permissionDenied, title: "Voice permissions", detail: detail)
+        Task { @MainActor [weak self] in
+            let status = await VoicePermissions.current()
+            guard let self else { return }
+            if status.ready || self.island.state.activePhase != nil {
+                self.island.notice(status.detail)
+            } else {
+                self.island.show(.permissionDenied, title: "Voice permissions", detail: status.detail)
+            }
         }
     }
     @objc private func openDashboard() {
@@ -222,6 +275,8 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func quit() {
         taskWatcher?.stop()
+        for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
+        workspaceObservers.removeAll()
         conversation.cancel()
         NSApp.terminate(nil)
     }
@@ -247,7 +302,14 @@ enum JarvisDesktop {
             return
         }
         if arguments.first == "--check-permissions" {
-            print("Microphone: \(VoicePermissions.microphone); Speech: \(VoicePermissions.speech)")
+            let app = NSApplication.shared
+            app.setActivationPolicy(.accessory)
+            Task { @MainActor in
+                let status = await VoicePermissions.current()
+                print(status.detail)
+                app.terminate(nil)
+            }
+            app.run()
             return
         }
         if arguments.first == "--check-speech-capability" {
@@ -343,6 +405,27 @@ enum JarvisDesktop {
         }
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        if arguments.first == "--render-island-layers", arguments.count == 2 {
+            do {
+                let count = try IslandLayerEvidence.render(directory: URL(fileURLWithPath: arguments[1]))
+                print("Island CALayer frames: \(count); deterministic layer evidence, no live microphone or animation proof")
+            } catch { fputs("Could not render Island layer evidence\n", stderr); exit(1) }
+            return
+        }
+        if arguments.first == "--render-island-transitions", arguments.count == 2 {
+            do {
+                let result = try LiveTextEvidence.renderTransitions(directory: URL(fileURLWithPath: arguments[1]))
+                print("Offscreen Island frames: \(result.frames); expansion intermediate: \(result.expandingIntermediateFrames); collapse intermediate: \(result.collapsingIntermediateFrames). Text/Canvas only; no Metal or audio proof")
+            } catch { fputs("Could not render Island transition evidence\n", stderr); exit(1) }
+            return
+        }
+        if arguments.first == "--render-live-text", arguments.count == 2 {
+            do {
+                try LiveTextEvidence.render(to: URL(fileURLWithPath: arguments[1]))
+                print("Text view rendering written; static frame, no animation or Metal capture")
+            } catch { fputs("Could not render text view evidence\n", stderr); exit(1) }
+            return
+        }
         if arguments.first == "--snapshot-island", arguments.count == 2 {
             do {
                 let count = try IslandDemo.snapshot(directory: URL(fileURLWithPath: arguments[1]))

@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 
 enum IslandDemo {
+    static let fixtureNotchHeight: CGFloat = 32
+    static let fixtureNotchWidth: CGFloat = 180
+    static let snapshotSettleDuration: TimeInterval = 0.05
     static let cases: [(IslandPhase, String, String)] = [
         (.ready, "Jarvis", ""), (.waking, "Preparing microphone", ""),
         (.listening, "What's the plan for today?", "Listening"),
@@ -22,19 +25,33 @@ enum IslandDemo {
     static func snapshot(directory: URL) throws -> Int {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let model = IslandViewModel()
+        model.evidenceRendering = true
         var written = 0
         for notch in [false, true] {
             model.hasNotch = notch
-            model.notchHeight = notch ? 32 : 0
+            model.notchHeight = notch ? fixtureNotchHeight : 0
             for (phase, title, detail) in cases {
-                let width = phase == .ready || phase == .waking || phase == .done || phase == .notification
-                    ? IslandDesign.compactWidth : IslandDesign.expandedWidth
-                let height: CGFloat = width == IslandDesign.compactWidth ? (notch ? 62 : 30) : (notch ? 108 : 76)
                 model.display = IslandDisplay(phase: phase, title: title, detail: detail,
                                               wordIndex: phase == .speaking ? 3 : nil,
-                                              microphoneLevel: phase == .listening ? 0.7 : 0)
-                let view = NSHostingView(rootView: IslandView(model: model))
-                view.frame = NSRect(x: 0, y: 0, width: width, height: height)
+                                              microphoneLevel: phase == .listening ? 0.7 : 0,
+                                              listeningExpanded: phase == .listening)
+                model.layerMeter.store(model.display.microphoneLevel)
+                let size = IslandLayout.size(for: model.display, hasNotch: notch,
+                    notchHeight: model.notchHeight, notchWidth: fixtureNotchWidth,
+                    availableWidth: IslandDesign.expandedWidth)
+                let frame = NSRect(origin: .zero, size: size).insetBy(dx: -IslandDesign.panelMargin,
+                                                                    dy: -IslandDesign.panelMargin)
+                let view = NSHostingView(rootView: IslandView(model: model).padding(IslandDesign.panelMargin))
+                view.sizingOptions = []
+                view.frame = NSRect(origin: .zero, size: frame.size)
+                let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.sharingType = .none
+                window.backgroundColor = .clear
+                window.isOpaque = false
+                window.contentView = view
+                defer { window.close() }
+                RunLoop.main.run(until: Date().addingTimeInterval(snapshotSettleDuration))
                 view.layoutSubtreeIfNeeded()
                 guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { continue }
                 view.cacheDisplay(in: view.bounds, to: bitmap)
@@ -59,7 +76,10 @@ enum IslandDemo {
             case .ready:
                 island.ready(true)
                 island.end(.status, text: "")
-            case .waking, .listening, .thinking, .working, .speaking, .mutedReply, .modelDownload:
+            case .listening:
+                island.begin(.listening, title: "Listening")
+                island.transcript(item.1)
+            case .waking, .thinking, .working, .speaking, .mutedReply, .modelDownload:
                 island.begin(item.0, title: item.1, detail: item.2)
             case .done: island.end(.answer, text: item.2)
             case .notification: island.notice(item.2)
