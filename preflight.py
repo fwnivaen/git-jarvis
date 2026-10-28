@@ -178,6 +178,63 @@ class Harness:
         require(backend in ('codex-cli', 'openai-api', 'openrouter'), 'unsupported brain backend in configuration')
         return self.config
 
+    def notes_directory(self):
+        """Read the selected scope without activating a checker-side Brain/index."""
+        try:
+            selected = server.BRAIN.settings()['vault_path']
+        except (ValueError, OSError, KeyError):
+            raise CheckFailure('local Brain selection is unavailable; no capture was written') from None
+        status, _, raw = self.request('/brain')
+        if status == 404:
+            require(selected is None, 'running server cannot verify the selected Brain; no capture was written')
+            return build.NOTES_DIR
+        require(status == 200, 'running Brain status is unavailable; no capture was written')
+        try:
+            live = json.loads(raw)
+        except (ValueError, TypeError):
+            raise CheckFailure('running Brain status is invalid; no capture was written') from None
+        require(isinstance(live, dict) and type(live.get('schema_version')) is int
+                and live['schema_version'] == server.obsidian_brain.SCHEMA_VERSION
+                and all(type(live.get(key)) is bool for key in ('configured', 'active', 'restart_required')),
+                'running Brain status is invalid; no capture was written')
+        require(live['restart_required'] is False,
+                'Brain selection has a pending restart; no capture was written')
+        if selected is None:
+            require(live['configured'] is False and live['active'] is False and live.get('vault_name') is None,
+                    'local and running Brain scopes differ; no capture was written')
+            return build.NOTES_DIR
+        folder = Path(selected)
+        require(folder.is_absolute() and folder.is_dir() and not folder.is_symlink()
+                and folder.resolve() == folder,
+                'selected Brain folder is unavailable or changed; no capture was written')
+        require(live['configured'] is True and live['active'] is True and live.get('vault_name') == folder.name,
+                'local and running Brain scopes differ; no capture was written')
+        # The public status deliberately omits the vault's absolute path. Verify
+        # an existing source URI as well: two different folders can share a name.
+        if self.graph is None:
+            self.load_graph()
+        source = next((node for node in self.graph['nodes'] if not node.get('capture_hub')
+                       and type(node.get('id')) is int and isinstance(node.get('stable_id'), str)), None)
+        require(source is not None, 'selected Brain has no verifiable live source; no capture was written')
+        status, note = self.json_request('/note?id=' + str(source['id']))
+        require(status == 200 and isinstance(note, dict),
+                'live Brain source cannot be verified; no capture was written')
+        uri = urllib.parse.urlsplit(note.get('obsidian_uri', '') if isinstance(note.get('obsidian_uri'), str) else '')
+        paths = urllib.parse.parse_qs(uri.query).get('path', [])
+        require(uri.scheme == 'obsidian' and uri.netloc == 'open' and len(paths) == 1,
+                'live Brain source scope is unavailable; no capture was written')
+        try:
+            source_path = Path(paths[0])
+            relative = source_path.relative_to(folder).as_posix()
+            matches = (source_path.is_absolute() and source_path.resolve() == source_path
+                       and folder in source_path.parents and source_path.is_file()
+                       and server.note_store.stable_id(relative) == source['stable_id']
+                       and note.get('stable_id') == source['stable_id'])
+        except (OSError, ValueError):
+            matches = False
+        require(matches, 'local and running Brain folders differ; no capture was written')
+        return folder
+
     def viewer(self):
         status, headers, raw = self.request('/')
         require(status == 200, f'viewer returned HTTP {status}')
@@ -290,6 +347,7 @@ class Harness:
         return 'fake version/paid-provider refusals, real Codex swap and answer, reset to config passed'
 
     def capture(self):
+        notes_directory = self.notes_directory()
         # Refuse to write a probe to a stale server without guaranteed cleanup support.
         status, capability = self.json_request('/preflight/status')
         require(status == 200 and capability.get('protocol') == server.PREFLIGHT_PROTOCOL,
@@ -297,13 +355,13 @@ class Harness:
         token = uuid.uuid4().hex
         secret = uuid.uuid4().hex
         pattern = f'Preflight {token} *.md'
-        folder = build.NOTES_DIR / 'captures'
+        folder = notes_directory / 'captures'
         question = f'remember that Preflight {token} verification code is {secret}.'
         try:
             status, value = self.json_request('/remember', {'question': question, 'preflight_token': token})
             require(status == 200 and not value.get('error'), f'/remember failed (HTTP {status})')
             files = list(folder.glob(pattern))
-            require(len(files) == 1 and files[0].is_file() and not files[0].is_symlink(), 'capture was not written in this checkout')
+            require(len(files) == 1 and files[0].is_file() and not files[0].is_symlink(), 'capture was not written in the verified notes folder')
             require(secret in files[0].read_text(encoding='utf-8'), 'capture file does not contain the saved fact')
             self.load_graph()
             captured = value.get('captured')
@@ -379,7 +437,7 @@ class Harness:
         # Detect a disk note edit missing from the running in-memory graph too.
         self.load_graph()
         actual = sorted((n['label'], n['group'], n['excerpt']) for n in self.graph['nodes'])
-        expected = sorted((n['label'], n['group'], n['excerpt']) for n in build.read_notes())
+        expected = sorted((n['label'], n['group'], n['excerpt']) for n in build.read_notes(self.notes_directory()))
         require(actual == expected, 'live index differs from notes on disk; restart server.py')
         return f'{len(paths)} served routes match disk byte-for-byte; live note index matches disk'
 
