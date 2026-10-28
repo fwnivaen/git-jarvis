@@ -1,6 +1,6 @@
 # Saved task privacy
 
-This feature is prepared in the isolated build. Replacing the running assistant still requires approval.
+This feature is included in the approved running build. Its storage and HTTP boundaries were independently reviewed; real synthetic-task removal and old-request blocking passed before activation.
 
 ## What Jarvis saves
 

@@ -1,6 +1,6 @@
 # Local voice, task and note controls
 
-This describes the isolated candidate, which is not the running installation. See the [implementation record](voice-island-report.md) for checks and remaining acceptance.
+This describes the approved build running from local main after the coordinated restart on 2026-10-28. See the [implementation record](voice-island-report.md) for checks and remaining acceptance.
 
 ## Desktop voice
 
@@ -60,6 +60,6 @@ Settings → **Saved task privacy** adds explicit review and removal of one term
 
 `tools/check_native.sh` builds both helpers in a disposable directory. `JARVIS_DESKTOP_APP_PATH`, `JARVIS_VOICE_APP_PATH` and `JARVIS_SWIFT_MODULE_CACHE` select explicit output/cache paths. Demo, snapshot and text/layer/transition evidence modes register no hotkeys, open no microphone and call no server.
 
-The untouched original checkout/services remain the rollback baseline. Activating the new server/helper together, merging, pushing and changing login startup require approval. Both updated components must load before their shared microphone lock protects both paths. Never run two normal helpers.
+The recorded previous revision `1d1027c`, original 30 notes, unchanged private configuration, earlier desktop bundle and saved browser helper remain the rollback baseline. The user approved local merge and coordinated activation on 2026-10-28. Both updated native helpers were installed, and only one normal desktop helper runs. Pushing and login startup still require a separate choice. Never run two normal helpers.
 
 After approved activation, rollback stops the new helper/server, returns to the recorded previous revision without discarding work and starts the previous build. Preserve configuration, vault, checkpoints and approval journals. **Show Jarvis Island** can immediately hide the panel while preserving voice.

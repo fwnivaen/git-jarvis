@@ -2,13 +2,13 @@
 
 A **vault** is simply a folder of notes. Obsidian edits those notes; Jarvis searches the same files and can use relevant passages in answers. The connection uses ordinary Markdown, without a community plugin, Obsidian account or paid API key.
 
-## Prepared setup
+## Connected setup
 
-The isolated candidate includes a new **Brain** tab and a separate four-note starter folder for Nivaen Giritharan. It includes a start guide, About me, Jarvis project and memory rules, plus Inbox, Knowledge, Projects, Decisions, Daily and Private folders. Existing demonstration notes are preserved.
+The running build includes a **Brain** tab and a separate four-note starter folder for Nivaen Giritharan. It includes a start guide, About me, Jarvis project and memory rules, plus Inbox, Knowledge, Projects, Decisions, Daily and Private folders. Existing demonstration notes are preserved.
 
-The proposed installed locations are `~/Applications/Obsidian.app` and `~/Documents/Jarvis Brain`. Installation, selecting that folder for the running assistant, and restarting Jarvis require the explicit replacement approval from the attached prompt. The verified official Obsidian 1.14.5 installer is staged privately; the app has not been installed or opened.
+Obsidian 1.14.5 is installed at `~/Applications/Obsidian.app`; the shared notes live at `~/Documents/Jarvis Brain`. The user approved installation, local-main merge and coordinated restart on 2026-10-28. Obsidian visibly opened the folder, and the running Jarvis Brain search returned About me with no model call. The original 30 notes and private configuration were preserved. No account, paid service, community plugin or startup service was added.
 
-Once connected, edit notes in Obsidian or Jarvis. Choose **Refresh notes** in Brain to update the galaxy, or ask a question; source use refreshes the shared index first. **Open in Obsidian** opens the original file. **Read in Jarvis** resolves its stable identity after refreshing the graph. Connection/disconnection takes effect at server startup so an active task never silently changes vaults.
+Edit notes in Obsidian or Jarvis. Choose **Refresh notes** in Brain to update the galaxy, or ask a question; source use refreshes the shared index first. **Open in Obsidian** requests the original file in the native app. The automated browser blocks external app links under its security policy, so a human must accept that click-path check. **Read in Jarvis** resolves its stable identity after refreshing the graph. Connection/disconnection takes effect at server startup so an active task never silently changes vaults.
 
 ## Saving unnecessary model work
 
