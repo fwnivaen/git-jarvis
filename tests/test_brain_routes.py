@@ -42,6 +42,7 @@ class BrainRouteTests(unittest.TestCase):
                 (server, 'ROOT', self.root), (server, 'BRAIN', self.brain),
                 (server, 'OPERATIONS', self.operations), (server, 'ACTIVITY', self.activity),
                 (server, 'NOTES', []), (server, 'PREFERENCES', Mock(read=Mock(return_value={}))),
+                (server, 'PREFLIGHT_CAPTURES', {}), (server, 'PREFLIGHT_CLOSED', {}),
                 (server, 'NOTE_ACTION_PATH', self.root / 'legacy-actions.sqlite3'),
                 (server, 'PREFERENCE_ACTION_PATH', self.root / 'legacy-preference-actions.sqlite3'),
                 (build, 'NOTES_DIR', self.legacy),
@@ -176,6 +177,44 @@ class BrainRouteTests(unittest.TestCase):
         self.assertEqual(self.brain.index.indexed, 0)
         for invalid in (None, True, '', 'x' * (obsidian_brain.MAX_QUERY_CHARS + 1)):
             self.assertEqual(request('/brain/search', 'POST', {'query': invalid}, ORIGIN)[0], 400)
+
+    def test_preflight_cleanup_updates_shared_index_with_and_without_capture_refresh(self):
+        vault = self.activate()
+        before = [note['_path'] for note in server.NOTES]
+        for indexed, token in ((False, 'a' * 32), (True, 'b' * 32)):
+            with self.subTest(capture_was_indexed=indexed):
+                server.remember(f'remember that Preflight {token} verification code is zxqw.', token)
+                if indexed:
+                    server.refresh_brain_notes(force=True)
+                    self.assertTrue(self.brain.search(token, server.NOTES))
+                status, _, receipt = self.json_request('/preflight/cleanup', 'POST', {'token': token})
+                self.assertEqual(status, 200)
+                self.assertTrue(receipt['cleaned'])
+                self.assertNotIn(token, json.dumps(receipt))
+                self.assertEqual([note['_path'] for note in server.NOTES], before)
+                self.assertEqual(self.brain.search(token, server.NOTES), [])
+                self.assertEqual(self.brain.index.indexed, len(before))
+                self.assertFalse(list((vault / 'captures').glob('*.md')))
+                self.assertNotIn(token, server.PREFLIGHT_CAPTURES)
+                self.assertIn(token, server.PREFLIGHT_CLOSED)
+
+    def test_capture_receipt_uses_refreshed_shared_graph_ids(self):
+        self.activate()
+        token = 'c' * 32
+        with patch.object(server.native_tool_routes, 'invoke',
+                side_effect=lambda _name, args, operation, **_kwargs: operation(args['text'])):
+            status, _, value = self.json_request('/remember', 'POST', {
+                'question': f'remember that Preflight {token} verification code is zxqw.',
+                'preflight_token': token}, ORIGIN)
+        self.assertEqual(status, 200)
+        captured = next(note for note in server.NOTES if token in note['label'])
+        self.assertEqual(value['captured'], captured['id'])
+        self.assertEqual(value['nodes'], [captured['id']])
+        self.assertEqual(value['graph'], build.make_graph(server.NOTES))
+        self.assertTrue(self.brain.search(token, server.NOTES))
+        self.assertFalse(server.refresh_brain_notes(force=True))
+        self.assertEqual(value['graph'], build.make_graph(server.NOTES))
+        server.cleanup_preflight(token)
 
     def test_notes_export_calls_only_selected_provider_and_omits_private_data(self):
         self.activate()

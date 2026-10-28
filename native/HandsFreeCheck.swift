@@ -15,6 +15,20 @@ enum HandsFreeCheck {
         check(HandsFreeText.command(in: "Hey Jarvis") == "", "wake alone is not a command")
         check(HandsFreeText.clean(String(repeating: "x", count: 2000)).count == 1000, "questions are bounded")
 
+        let consent = HandsFreeConsent(generation: 4)
+        check(consent.allowsActivation(currentGeneration: 4, conversationIdle: true,
+            muted: false, manualCapturePending: false), "unchanged explicit consent may enable")
+        check(!consent.allowsActivation(currentGeneration: 5, conversationIdle: true,
+            muted: false, manualCapturePending: false), "cancel during the dialog invalidates consent")
+        check(!consent.allowsActivation(currentGeneration: 4, conversationIdle: true,
+            muted: true, manualCapturePending: false), "mute during the dialog keeps capture off")
+        check(!consent.allowsActivation(currentGeneration: 4, conversationIdle: false,
+            muted: false, manualCapturePending: false), "a started conversation prevents late activation")
+        check(!consent.allowsActivation(currentGeneration: 4, conversationIdle: true,
+            muted: false, manualCapturePending: true), "PTT handoff prevents late activation")
+        check(HandsFreeConsent(generation: 5).allowsActivation(currentGeneration: 5,
+            conversationIdle: true, muted: false, manualCapturePending: false), "a new explicit choice may enable after cancellation")
+
         var turn = HandsFreeTurn(now: 0)
         check(turn.transcript("Ambient private conversation", now: 1) == .none, "ambient transcript does not wake")
         check(turn.question.isEmpty && turn.stage == .wake, "ambient text is excluded from questions")

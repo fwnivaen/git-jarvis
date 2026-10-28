@@ -54,6 +54,8 @@ Settings → Background and daily checks is opt-in. It uses New York time, one c
 
 History projects bounded task/approval metadata, not transcripts or note bodies. Settings → Export your data downloads only checked sections as an in-memory ZIP. Private notes/configuration/credentials/checkpoints/journals are excluded; this is not a complete backup or automatic erasure mechanism.
 
+Settings → **Saved task privacy** adds explicit review and removal of one terminal, cleanup-complete, unowned Work task. Its contents and known checkpoint/journal files are removed only after a separate exact-state confirmation. A pending receipt means cleanup is unfinished and requires an explicit retry. Minimal admission/removal markers prevent an old launch request from recreating the task. Source notes, preferences, approval queues, older Ultra runs, previous exports and optional minimized learning hashes are excluded. There is no automatic expiry or secure-wipe claim. [Full scope](TASK-PRIVACY.md).
+
 ## Verification and rollback
 
 `tools/check_native.sh` builds both helpers in a disposable directory. `JARVIS_DESKTOP_APP_PATH`, `JARVIS_VOICE_APP_PATH` and `JARVIS_SWIFT_MODULE_CACHE` select explicit output/cache paths. Demo, snapshot and text/layer/transition evidence modes register no hotkeys, open no microphone and call no server.

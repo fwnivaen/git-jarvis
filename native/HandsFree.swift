@@ -99,6 +99,9 @@ final class HandsFreeController: @unchecked Sendable {
         guard enabled, !suspendedForPushToTalk, conversationIsIdle() else { return }
         let previous = invalidateCapture()
         let current = generation
+        // The promised follow-up owns the conversation even while its analyzer
+        // prepares. A queued background reply must not take over this window.
+        islandOwned = followup
         setStatus("Hands-free preparing")
         startup = Task { @MainActor [weak self] in
             await previous?.value

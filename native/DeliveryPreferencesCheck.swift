@@ -81,8 +81,10 @@ enum DeliveryPreferencesCheck {
         let patch = payload["settings"] as! [String: Any]
         check(patch.count == 1 && patch["speak_background_updates"] as? Bool == true)
         check(saved?.settings.speakBackgroundUpdates == true && !client.updating)
-        check(!client.accept(try policy(a), requestGeneration: 0))
+        check(client.awaitingDeliveryPolicy)
+        check(!client.accept(try policy(a), requestGeneration: 0) && client.awaitingDeliveryPolicy)
         check(client.accept(try policy(a), requestGeneration: client.generation))
+        check(!client.awaitingDeliveryPolicy)
         // Hashes can repeat when a user deliberately reverts settings; only
         // request generations, never historical hashes, identify stale polls.
         check(client.accept(try policy(b), requestGeneration: client.generation))
@@ -96,12 +98,15 @@ enum DeliveryPreferencesCheck {
         client.setSpeech(true) { if case .conflict(let value) = $0 { conflicted = value?.revision == c } }
         spin { conflicted }
         check(!client.updating)
+        check(client.awaitingDeliveryPolicy)
         check(OperationsFixtureProtocol.requests.count == 3)
         var failure = false
         OperationsFixtureProtocol.handler = { _ in (500, Data()) }
         client.setSpeech(true) { if case .failed = $0 { failure = true } }
         spin { failure }
         check(!client.updating)
+        check(client.awaitingDeliveryPolicy)
+        check(client.accept(try policy(c), requestGeneration: client.generation) && !client.awaitingDeliveryPolicy)
         let fallback = OperationsSpeechPreferences(session: session)
         var legacy = false
         OperationsFixtureProtocol.handler = { _ in (404, Data()) }
@@ -109,6 +114,7 @@ enum DeliveryPreferencesCheck {
         fallback.setSpeech(false) { if case .legacy = $0 { legacy = true } }
         spin { legacy }
         check(OperationsFixtureProtocol.requests.count == before + 1 && !fallback.updating)
+        check(!fallback.awaitingDeliveryPolicy)
         print("Delivery settings synchronization checks: \(passed) passed")
     }
 }

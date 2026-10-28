@@ -33,6 +33,17 @@ enum HandsFreeText {
     }
 }
 
+// A consent dialog runs a nested event loop. Global cancel, mute or PTT can
+// change the voice state before its Enable button returns to the caller.
+struct HandsFreeConsent {
+    let generation: Int
+
+    func allowsActivation(currentGeneration: Int, conversationIdle: Bool,
+                          muted: Bool, manualCapturePending: Bool) -> Bool {
+        generation == currentGeneration && conversationIdle && !muted && !manualCapturePending
+    }
+}
+
 // Pure end-of-turn policy. Monotonic uptime is supplied by the controller;
 // ambient speech cannot produce a request without the explicit wake phrase.
 struct HandsFreeTurn {

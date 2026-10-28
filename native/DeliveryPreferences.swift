@@ -68,24 +68,30 @@ final class OperationsSpeechPreferences {
     private var revision: String?
     private(set) var updating = false
     private(set) var generation = 0
+    private(set) var awaitingDeliveryPolicy = false
 
     init(session: URLSession = .shared) { self.session = session }
 
     @discardableResult func accept(_ policy: TaskDeliveryPolicy, requestGeneration: Int) -> Bool {
         guard requestGeneration == generation, !updating else { return false }
         revision = policy.revision
+        awaitingDeliveryPolicy = false
         return true
     }
 
     private func finish(_ result: Result, completion: (Result) -> Void) {
         updating = false
         generation += 1
+        if case .legacy = result { awaitingDeliveryPolicy = false }
         completion(result)
     }
 
     func setSpeech(_ enabled: Bool, completion: @escaping (Result) -> Void) {
         guard !updating else { completion(.failed); return }
         updating = true
+        // A speech-only acknowledgement does not establish the current quiet
+        // gate. Keep delivery deferred until a fresh canonical policy arrives.
+        awaitingDeliveryPolicy = true
         generation += 1
         if let revision { post(enabled, revision: revision, completion: completion); return }
         var request = URLRequest(url: Self.endpoint)

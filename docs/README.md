@@ -18,6 +18,7 @@
 | [Obsidian Brain](OBSIDIAN-BRAIN.md) | Shared local notes, usage controls, privacy, setup and limits |
 | [Remaining build plan](BUILD-PLAN.md) | Ordered implementation and concrete acceptance gates |
 | [Local controls](LOCAL-CONTROLS.md) | Voice, previews, exact decisions, local operations and rollback |
+| [Saved task privacy](TASK-PRIVACY.md) | Explicit removal of settled Work contents, duplicate prevention and erasure limits |
 | [Architecture](ARCHITECTURE.md) | Request flow, module boundaries, validation and failure semantics |
 | [Usage](USAGE.md) | Notes, voice, Eyes and screen-watch controls |
 | [Current verification](ultra-verification.md) | Actual test results, live trials and known limits |

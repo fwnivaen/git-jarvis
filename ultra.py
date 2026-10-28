@@ -296,7 +296,10 @@ class UltraJarvis:
         self.monitor = monitor or Monitor()
         self.bridge = None
         self._frames = {}
-        self._lock = threading.Lock()
+        # The server keeps this gate through answer delivery and its exact
+        # source snapshot. answer() takes the same gate when called directly.
+        # Reentry by that caller must work; other requests remain serialized.
+        self._lock = threading.RLock()
         self._store = workflow_store
         self._evaluation = None
         self._run = None

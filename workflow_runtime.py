@@ -22,6 +22,7 @@ from ultra import CHECKED_SCHEMA, REPORT_SCHEMA, STAGE_ONE_BOUNDARY, TOOLS_BOUND
 from ultra_workflows import workflow_template
 from workflow_graph import compile_workflow, GRAPH_RECURSION_LIMIT
 from task_limits import TASK_MAX_CONCURRENT, TASK_LIMIT_NOTICE, parse_task_limit
+import workflow_retention as retention
 
 ROOT = Path(__file__).resolve().parent / '.local' / 'graph-workflows'
 MAX_RUNS = 50
@@ -99,27 +100,39 @@ class RunStore:
         os.chmod(self.root, 0o700)
         self.lock = threading.RLock()
         self.path = self.root / 'catalog.sqlite'
-        self.conn = self.connect(self.path)
+        self.conn, self.catalog_identity = self.connect(self.path, with_identity=True)
+        self.root_identity = retention.identities(self.root)
         with self.conn:
             self.conn.execute('CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, data TEXT NOT NULL)')
             self.conn.execute('CREATE TABLE IF NOT EXISTS admissions (request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, run_id TEXT NOT NULL)')
+            self.conn.execute('CREATE TABLE IF NOT EXISTS erasures (id TEXT PRIMARY KEY, created_at REAL NOT NULL, data TEXT NOT NULL)')
 
     @staticmethod
-    def connect(path):
+    def connect(path, with_identity=False):
         if path.is_symlink():
             raise OSError('Unsafe database path')
         fd = os.open(path, os.O_CREAT | os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), 0o600)
         os.fchmod(fd, 0o600)
+        initial = os.fstat(fd)
         os.close(fd)
         conn = sqlite3.connect(path, timeout=SQL_TIMEOUT_S, check_same_thread=False)
-        # DELETE mode avoids world-readable WAL sidecars; parent is private too.
-        conn.execute('PRAGMA journal_mode=DELETE')
-        return conn
+        try:
+            current = os.stat(path, follow_symlinks=False)
+            if (not retention._owned(current) or (initial.st_dev, initial.st_ino) != (current.st_dev, current.st_ino)):
+                raise OSError('Database path changed while opening')
+            # DELETE mode avoids world-readable WAL sidecars; parent is private too.
+            conn.execute('PRAGMA journal_mode=DELETE')
+        except BaseException:
+            conn.close()
+            raise
+        return (conn, (initial.st_dev, initial.st_ino)) if with_identity else conn
 
     def get(self, identifier):
         if not isinstance(identifier, str) or not RUN_ID.fullmatch(identifier):
             raise WorkflowError('Unknown workflow run.', 404)
         with self.lock:
+            if self.erasure(identifier) is not None:
+                raise WorkflowError('This task was removed and cannot be restarted.', 410)
             row = self.conn.execute('SELECT data FROM runs WHERE id=?', (identifier,)).fetchone()
             if row is None:
                 raise WorkflowError('Unknown workflow run.', 404)
@@ -127,6 +140,8 @@ class RunStore:
 
     def save(self, data):
         with self.lock, self.conn:
+            if self.erasure(data['id']) is not None:
+                raise WorkflowError('This task was removed and cannot be restarted.', 410)
             self.conn.execute('INSERT OR REPLACE INTO runs VALUES (?, ?)',
                 (data['id'], json.dumps(data, allow_nan=False)))
 
@@ -139,23 +154,59 @@ class RunStore:
             row = self.conn.execute('SELECT fingerprint,run_id FROM admissions WHERE request_key=?', (request_key,)).fetchone()
             if row is None:
                 return None
+            if self.erasure(row[1]) is not None:
+                raise WorkflowError('This task was removed and cannot be restarted.', 410)
             if row[0] != fingerprint:
                 raise WorkflowError('That request key belongs to a different task.', 409)
             return self.get(row[1])
 
     def admit(self, data, request_key, fingerprint):
         with self.lock, self.conn:
+            if self.erasure(data['id']) is not None:
+                raise WorkflowError('This task was removed and cannot be restarted.', 410)
             self.conn.execute('INSERT INTO runs VALUES (?,?)', (data['id'], json.dumps(data, allow_nan=False)))
             if request_key is not None:
                 self.conn.execute('INSERT INTO admissions VALUES (?,?,?)', (request_key, fingerprint, data['id']))
 
     def all(self):
         with self.lock:
-            return sorted([json.loads(row[0]) for row in self.conn.execute('SELECT data FROM runs')],
+            return sorted([json.loads(row[0]) for row in self.conn.execute(
+                'SELECT data FROM runs r WHERE NOT EXISTS (SELECT 1 FROM erasures e WHERE e.id=r.id)')],
                 key=lambda row: row['created_at'], reverse=True)
 
+    def erasure(self, identifier):
+        with self.lock:
+            row = self.conn.execute('SELECT data FROM erasures WHERE id=?', (identifier,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def erasures(self):
+        with self.lock:
+            return [json.loads(row[0]) for row in self.conn.execute(
+                "SELECT data FROM erasures ORDER BY json_extract(data,'$.state')='pending' DESC, created_at DESC LIMIT ?", (retention.MAX_CATALOG_ITEMS,))]
+
+    def begin_erasure(self, identifier, revision, files, catalog_bytes):
+        with self.lock, self.conn:
+            marker = {'id': identifier, 'state': 'pending', 'revision': revision,
+                      'created_at': time.time(), 'manifest': files, 'catalog_bytes': catalog_bytes}
+            self.conn.execute('INSERT INTO erasures VALUES (?,?,?)',
+                (identifier, marker['created_at'], json.dumps(marker, allow_nan=False)))
+            return marker
+
+    def finish_erasure(self, marker):
+        with self.lock, self.conn:
+            # The receipt contains no question, answer, source or artifact hashes.
+            marker = {key: marker[key] for key in ('id', 'revision', 'created_at')}
+            marker.update(state='erased', erased_at=time.time())
+            self.conn.execute('DELETE FROM runs WHERE id=?', (marker['id'],))
+            self.conn.execute('UPDATE erasures SET data=? WHERE id=?',
+                              (json.dumps(marker, allow_nan=False), marker['id']))
+            return marker
+
     def capacity(self):
-        return len(self.all()) < MAX_RUNS and sum(p.stat().st_size for p in self.root.glob('*.sqlite')) < MAX_DB_BYTES
+        with self.lock:
+            # Pending removals still retain their content and consume capacity.
+            count = self.conn.execute('SELECT count(*) FROM runs').fetchone()[0]
+            return count < MAX_RUNS and sum(p.stat().st_size for p in self.root.glob('*.sqlite')) < MAX_DB_BYTES
 
     def close(self):
         self.conn.close()
@@ -440,6 +491,7 @@ class WorkflowService:
         self.pending_tools = {}
         self.finished_executors = set()
         self.store = None
+        self._deferred_recovery = False
         self.bridge = None
         self.owners = {}
         self._cleanup_stop = threading.Event()
@@ -467,11 +519,12 @@ class WorkflowService:
 
     def initialize(self):
         with self.lock:
-            if self.store is not None:
+            if self.store is not None and not self._deferred_recovery:
                 return
             try:
                 from langgraph.checkpoint.sqlite import SqliteSaver  # noqa: F401
-                self.store = RunStore(self.root)
+                if self.store is None:
+                    self.store = RunStore(self.root)
                 for run in self.store.all():
                     if run['status'] in ('running', 'cancelling'):
                         run.update(status='interrupted', error='disconnected')
@@ -481,6 +534,7 @@ class WorkflowService:
                         self.store.save(run)
                         self.event(run['id'], 'interrupted')
                 self.unavailable = None
+                self._deferred_recovery = False
             except ImportError:
                 self.unavailable = 'Install the workflow dependencies with python3 tools/setup_ultra.py --no-model.'
             except (OSError, sqlite3.Error):
@@ -509,6 +563,135 @@ class WorkflowService:
                 self.pending_tools.pop(run_id, None)
                 self.slots.release()
                 self.condition.notify_all()
+
+    def _retention_snapshot(self, identifier=None):
+        if self.store is None:
+            return retention.read_catalog(self.root, identifier)
+        retention.validate_paths(self.root, self.store.root_identity, self.store.catalog_identity)
+        marks = ([self.store.erasure(identifier)] if identifier else self.store.erasures())
+        marks = [row for row in marks if row is not None]
+        runs = self.store.all()
+        if identifier:
+            runs = [run for run in runs if run['id'] == identifier]
+        return True, runs, marks
+
+    def _erase_eligibility(self, run_id, run=None):
+        if run_id in self.owners or self.pending_tools.get(run_id, 0) or run_id in self.finished_executors:
+            return False, 'Wait until this task and all of its cleanup have finished.'
+        if run is not None and (run.get('status') not in TERMINAL or run.get('cleanup') != 'complete'):
+            return False, 'Only a finished task with confirmed complete cleanup can be removed.'
+        return True, None
+
+    def retention_catalog(self):
+        try:
+            with self.lock:
+                available, runs, marks = self._retention_snapshot()
+                items = []
+                for run in runs:
+                    eligible, reason = self._erase_eligibility(run['id'], run)
+                    items.append({'id': run['id'], 'label': self.redactor.text(run['question'], retention.LABEL_CHARS),
+                        'status': run['status'], 'cleanup': run.get('cleanup', 'none'),
+                        'settled': run['id'] not in self.owners, 'eligible': eligible,
+                        'reason': reason, 'state': 'retained', 'created_at': run['created_at']})
+                for mark in marks:
+                    items.append({'id': mark['id'], 'label': 'Removed task', 'status': mark['state'],
+                        'cleanup': 'complete' if mark['state'] == 'erased' else 'pending',
+                        'settled': mark['id'] not in self.owners, 'eligible': mark['state'] == 'pending',
+                        'state': mark['state'], 'created_at': mark['created_at'],
+                        'erased_at': mark.get('erased_at')})
+                return {'schema_version': retention.SCHEMA_VERSION, 'available': available,
+                    'items': sorted(items, key=lambda row: (row['state'] == 'erased', -row['created_at']))[:retention.MAX_CATALOG_ITEMS],
+                    'limits': dict(retention.LIMITS), 'exclusions': list(retention.EXCLUSIONS)}
+        except (retention.RetentionError, OSError, sqlite3.Error, ValueError, KeyError) as error:
+            raise WorkflowError('The private workflow retention catalog is unavailable.',
+                                getattr(error, 'status', 503)) from None
+
+    def _erase_plan(self, run_id):
+        if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+            raise WorkflowError('Unknown workflow run.', 404)
+        _, runs, marks = self._retention_snapshot(run_id)
+        base = {'schema_version': retention.SCHEMA_VERSION, 'id': run_id,
+            'effects': list(retention.EFFECTS), 'limits': dict(retention.LIMITS),
+            'exclusions': list(retention.EXCLUSIONS)}
+        if marks:
+            mark = marks[0]
+            pending = mark['state'] == 'pending'
+            eligible, reason = self._erase_eligibility(run_id)
+            artifacts = retention.public_artifacts(mark.get('manifest', []))
+            if pending:
+                artifacts.insert(0, {'kind': 'catalog_record', 'present': True, 'bytes': mark['catalog_bytes']})
+            return dict(base, state=mark['state'], eligible=pending and eligible,
+                reason=reason if pending else 'This task has already been removed.',
+                revision=mark['revision'], artifacts=artifacts, total_bytes=sum(row['bytes'] for row in artifacts))
+        if not runs:
+            raise WorkflowError('Unknown workflow run.', 404)
+        run = runs[0]
+        eligible, reason = self._erase_eligibility(run_id, run)
+        files = retention.manifest(self.root, run_id,
+            self.store.root_identity if self.store is not None else None)
+        artifacts = retention.public_artifacts(files, run)
+        if sum(row['bytes'] for row in artifacts) > retention.MAX_TOTAL_BYTES:
+            raise retention.RetentionError('This task exceeds the bounded removal limit.')
+        return dict(base, state='retained', eligible=eligible, reason=reason,
+            revision=retention.revision(run, files), artifacts=artifacts,
+            total_bytes=sum(row['bytes'] for row in artifacts))
+
+    def erase_plan(self, run_id):
+        try:
+            with self.lock:
+                return self._erase_plan(run_id)
+        except (retention.RetentionError, OSError, sqlite3.Error, ValueError, KeyError) as error:
+            raise WorkflowError('This task cannot be safely reviewed for removal.',
+                                getattr(error, 'status', 409)) from None
+
+    def erase(self, run_id, expected_revision, confirmed=False):
+        if confirmed is not True or not isinstance(expected_revision, str) or not re.fullmatch(r'[a-f0-9]{64}', expected_revision):
+            raise WorkflowError('Review the task and explicitly confirm its exact removal revision.')
+        try:
+            with self.lock:
+                plan = self._erase_plan(run_id)
+                if plan['revision'] != expected_revision:
+                    raise WorkflowError('This task changed after review. Review it again.', 409)
+                if plan['state'] != 'erased' and not plan['eligible']:
+                    raise WorkflowError(plan['reason'], 409)
+                if plan['state'] == 'erased':
+                    return self._erase_receipt(run_id, expected_revision, True, [])
+                if self.store is None:
+                    # Only a confirmed, reviewed existing task may initialize a
+                    # writable catalog. Read-only status/plan never does this.
+                    self.store = RunStore(self.root)
+                    self._deferred_recovery = True
+                    plan = self._erase_plan(run_id)
+                    if plan['revision'] != expected_revision or not plan['eligible']:
+                        raise WorkflowError('This task changed after review. Review it again.', 409)
+                mark = self.store.erasure(run_id)
+                retention.validate_paths(self.root, self.store.root_identity, self.store.catalog_identity)
+                if mark is None:
+                    run = self.store.get(run_id)
+                    files = retention.manifest(self.root, run_id, self.store.root_identity)
+                    if retention.revision(run, files) != expected_revision:
+                        raise WorkflowError('This task changed after review. Review it again.', 409)
+                    mark = self.store.begin_erasure(run_id, expected_revision, files, len(retention.state_bytes(run)))
+                try:
+                    retention.validate_paths(self.root, self.store.root_identity, self.store.catalog_identity)
+                    removed = retention.remove(self.root, run_id, mark['manifest'], self.store.root_identity)
+                    retention.validate_paths(self.root, self.store.root_identity, self.store.catalog_identity)
+                    self.store.finish_erasure(mark)
+                except (retention.RetentionError, OSError, sqlite3.Error):
+                    # The durable pending marker blocks replay even if an unlink,
+                    # fsync or final transaction failed. Only an explicit retry
+                    # advances it, including after restarting this process.
+                    return self._erase_receipt(run_id, expected_revision, False, [])
+                self.condition.notify_all()
+                return self._erase_receipt(run_id, expected_revision, True, ['catalog_record'] + removed)
+        except (retention.RetentionError, OSError, sqlite3.Error, ValueError, KeyError) as error:
+            raise WorkflowError('The task removal could not be safely started.', getattr(error, 'status', 409)) from None
+
+    @staticmethod
+    def _erase_receipt(run_id, revision, erased, removed):
+        return {'schema_version': retention.SCHEMA_VERSION, 'id': run_id, 'revision': revision,
+            'state': 'erased' if erased else 'pending', 'erased': erased, 'retryable': not erased,
+            'removed_artifacts': removed, 'exclusions': list(retention.EXCLUSIONS)}
 
     def phase(self, run_id, phase):
         self.change(run_id, phase=phase)
@@ -729,14 +912,16 @@ class WorkflowService:
                     or owner.get('bridge_cleanup_pending') else 'complete')
                 if jobs is not None:
                     jobs.session.close()
-                self.finished_executors.add(run_id)
-                self.release_owner(run_id)
-                self._schedule_cleanup_retry(run_id)
                 try:
                     from outcome_collection import capture
                     self.change(run_id, outcome_collection=capture(self.store.get(run_id)))
                 except Exception:
                     self.change(run_id, outcome_collection='unavailable')
+                # Ownership lasts through every final write, including optional
+                # minimized outcome capture. Removal can only begin afterwards.
+                self.finished_executors.add(run_id)
+                self.release_owner(run_id)
+                self._schedule_cleanup_retry(run_id)
 
     def close_bridge(self, run_id, expected_owner=None):
         """Keep capacity if process cleanup could not be confirmed."""

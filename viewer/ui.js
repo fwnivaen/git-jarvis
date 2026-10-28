@@ -129,6 +129,7 @@
     window.JarvisWorkflows?.dispose();
     window.JarvisLocalServices?.dispose();
     window.JarvisBrainServices?.dispose();
+    window.JarvisTaskPrivacy?.dispose();
     currentWorkspace=name;document.body.dataset.workspace=name;window.JarvisGalaxy?.setVisible(name==='galaxy');hidePreview();hideInsight();clearInterval(workTimer);workTimer=null;
     for(const selector of ['.sidebar','#graph','.scene-controls','#jarvis-orb-host','#detail','#chat','#galaxy-tree']){const element=document.querySelector(selector);if(element){element.inert=name!=='galaxy';if(name==='galaxy')element.removeAttribute('aria-hidden');else element.setAttribute('aria-hidden','true');}}
     $('workspace-view').hidden=name==='galaxy';$('breadcrumb').textContent='/ '+({galaxy:'Knowledge Galaxy',brain:'Jarvis Brain',work:'Mission Control',integrations:'Integrations'}[name]||name.charAt(0).toUpperCase()+name.slice(1));
@@ -209,7 +210,7 @@
     const body=workspaceFrame(kind==='voice'?'Voice':'Settings','Local controls, shared memory, and saved preferences.');
     window.JarvisLocalServices?.mountHealth(body);
     window.JarvisBrainServices?.mountOperations(body);
-    if(kind!=='voice'){row(body,'Obsidian brain','Choose your shared memory folder and control local retrieval.',button('Open Jarvis Brain',()=>setWorkspace('brain')));window.JarvisBrainServices?.mountExport(body);}
+    if(kind!=='voice'){row(body,'Obsidian brain','Choose your shared memory folder and control local retrieval.',button('Open Jarvis Brain',()=>setWorkspace('brain')));window.JarvisBrainServices?.mountExport(body);window.JarvisTaskPrivacy?.mount(body);}
     if(kind!=='voice')window.JarvisUltra?.mountSettings(body);
     if(kind!=='voice'){settingSelect(body,'Appearance','Dark observatory or warm paper.','theme',[['dark','Dark'],['light','Light'],['system','System']]);settingSelect(body,'Motion','System accessibility settings are always respected.','motion',[['system','Follow system'],['reduced','Reduced motion']]);
       const sounds=button(preferences.sounds?'On':'Off',()=>{preferences.sounds=!preferences.sounds;store(SETTINGS.preferenceKey,preferences);sounds.textContent=preferences.sounds?'On':'Off';sound();});row(body,'Interface sounds','Quiet, optional, and off by default.',sounds);

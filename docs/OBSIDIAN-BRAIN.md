@@ -41,7 +41,7 @@ Settings lets you request saving or forgetting an explicit preference. The model
 
 History displays bounded task and decision metadata. Settings can download only selected data as a ZIP; private notes, configuration, credentials, checkpoints and journals are excluded. Recognized credential forms are redacted, but selected user text should still be reviewed before sharing. This is not a complete backup/restore system.
 
-Removing or excluding a note removes it from subsequent successful search refreshes. It does not erase earlier exports, retained task checkpoints or approval receipts. Broader retention and deletion controls remain on the [build plan](BUILD-PLAN.md).
+Removing or excluding a note removes it from subsequent successful search refreshes. It does not erase earlier exports, retained task checkpoints or approval receipts. Settings → **Saved task privacy** separately reviews and removes one settled Work task's catalog contents, source checkpoints and tool journals. It retains a minimal duplicate-prevention record and does not remove source notes or preferences. [Scope and limits](TASK-PRIVACY.md). Broader retention across older stores remains on the [build plan](BUILD-PLAN.md).
 
 ## Maintenance helper
 

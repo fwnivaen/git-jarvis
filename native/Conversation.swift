@@ -457,6 +457,12 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         refreshBackgroundEligibility()
     }
 
+    func setForegroundInputActive(_ active: Bool) {
+        guard background.foregroundInputActive != active else { return }
+        background.foregroundInputActive = active
+        refreshBackgroundEligibility()
+    }
+
     func backgroundUpdate(_ text: String, id: String = UUID().uuidString) {
         background.enqueue(id: id, text: text)
         scheduleBackground()

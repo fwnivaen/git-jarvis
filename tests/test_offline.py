@@ -374,6 +374,16 @@ class Preflight(unittest.TestCase):
         self.assertEqual(server.NOTES, before)
         self.assertFalse(list((build.NOTES_DIR / 'captures').glob('*.md')))
 
+    def test_probe_cleanup_survives_rebuilt_note_dictionaries(self):
+        token = 'b' * 32
+        before = [note['_path'] for note in server.NOTES if note.get('_path')]
+        server.remember(f'remember that Preflight {token} verification code is zxqw.', token)
+        server.NOTES = build.read_notes(build.NOTES_DIR)
+        result = server.cleanup_preflight(token)
+        self.assertEqual([note['_path'] for note in server.NOTES if note.get('_path')], before)
+        self.assertNotIn(token, json.dumps(result))
+        self.assertFalse(list((build.NOTES_DIR / 'captures').glob('*.md')))
+
     def test_missing_notes_is_clear(self):
         with patch.object(build, 'NOTES_DIR', Path(self.scratch.name) / 'missing'):
             with self.assertRaisesRegex(server.BrainError, 'notes folder is missing'):

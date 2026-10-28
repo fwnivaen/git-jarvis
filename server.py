@@ -159,6 +159,7 @@ UI_ASSETS = {
     "workflows.js": "text/javascript", "workflows.css": "text/css",
     "local-services.js": "text/javascript",
     "brain-services.js": "text/javascript",
+    "task-privacy.js": "text/javascript",
     "theme.js": "text/javascript", "ui.js": "text/javascript",
     "tokens.css": "text/css", "app.css": "text/css", "open-deck.css": "text/css",
     "Inter.woff2": "font/woff2", "JetBrainsMono.woff2": "font/woff2",
@@ -612,7 +613,11 @@ def cleanup_preflight(token):
                 if path.read_text(encoding="utf-8") != original:
                     raise BrainError("Preflight capture was edited; cleanup refused, sir.")
                 path.unlink()
-            NOTES = [item for item in NOTES if item is not note]
+            # A shared-vault refresh replaces note dictionaries. Remove by the
+            # captured file identity and refresh FTS as well as the live graph.
+            refresh_brain_notes(force=True)
+            NOTES = [item for item in NOTES
+                     if item is not note and item.get("_path") != note["_path"]]
             if not any(f"[[{build.CAPTURE_HUB_TITLE}]]" in item["text"] for item in NOTES):
                 NOTES = [item for item in NOTES if not item.get("capture_hub")]
             for index, item in enumerate(NOTES):
@@ -944,6 +949,7 @@ def current_native_result(result, capture=False):
     """A replay receipt cannot replace the UI with stale graph IDs/content."""
     source = result.get("_source") if capture else result.get("note")
     with INDEX_LOCK:
+        refresh_brain_notes(force=True)
         note = next((n for n in NOTES if n.get("_path") and note_store.stable_id(n["_path"]) == source["stable_id"]), None)
         if note is None:
             raise ultra_tools.ToolError("The earlier save completed, but its source is no longer indexed. Refresh your notes.")
@@ -1265,6 +1271,14 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, OSError):
                 self.send_json({'error': True, 'answer': 'Readiness could not be checked. No setup changes were made.'}, 503)
             return
+        if path == '/workflows/retention':
+            try:
+                self.send_bytes(json.dumps(WORKFLOWS.retention_catalog()).encode(), 'application/json', head=head)
+            except workflow_runtime.WorkflowError as error:
+                self.send_json({'error': True, 'answer': str(error)}, error.status)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({'error': True, 'answer': 'Saved task privacy status is unavailable.'}, 503)
+            return
         if path in ('/preferences', '/preference-actions'):
             try:
                 identifier = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('id', [None])[0]
@@ -1459,7 +1473,7 @@ class Handler(BaseHTTPRequestHandler):
             WORKFLOWS.stream_slots.release()
 
     def do_POST(self):
-        if self.path not in ("/preference-actions/propose", "/preference-actions/decide", "/preference-actions/undo", "/brain/setup", "/brain/settings", "/brain/search", "/brain/refresh", "/brain/disconnect", "/operations/settings", "/operations/run", "/export/data", "/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
+        if self.path not in ("/preference-actions/propose", "/preference-actions/decide", "/preference-actions/undo", "/brain/setup", "/brain/settings", "/brain/search", "/brain/refresh", "/brain/disconnect", "/operations/settings", "/operations/run", "/export/data", "/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/workflows/erase-plan", "/workflows/erase", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
             self.send_json({"answer": "Not found.", "nodes": []}, 404)
             return
         if not self.local_request():
@@ -1473,6 +1487,28 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= (document_export.MAX_REQUEST_BYTES if self.path == "/export/word" else MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path in ("/note", "/approvals/propose") else MAX_VOICE_REQUEST_BYTES if self.path == "/voice/render" else MAX_REQUEST_BYTES):
                 raise ValueError
             body = json.loads(self.rfile.read(length))
+            if self.path in ('/workflows/erase-plan', '/workflows/erase'):
+                if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
+                    self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)
+                    return
+                try:
+                    fields = {'id'} if self.path == '/workflows/erase-plan' else {'id', 'expected_revision', 'confirmed'}
+                    if (not isinstance(body, dict) or set(body) != fields
+                            or not isinstance(body['id'], str) or not workflow_runtime.RUN_ID.fullmatch(body['id'])):
+                        raise workflow_runtime.WorkflowError('Review one saved task before removing its contents.')
+                    if self.path == '/workflows/erase-plan':
+                        value = WORKFLOWS.erase_plan(body['id'])
+                    else:
+                        if (body['confirmed'] is not True or not isinstance(body['expected_revision'], str)
+                                or re.fullmatch(r'[a-f0-9]{64}', body['expected_revision']) is None):
+                            raise workflow_runtime.WorkflowError('Confirm the exact reviewed task removal.')
+                        value = WORKFLOWS.erase(body['id'], body['expected_revision'], body['confirmed'])
+                    self.send_json(value, 202 if self.path == '/workflows/erase' and value.get('state') == 'pending' else 200)
+                except workflow_runtime.WorkflowError as error:
+                    self.send_json({'error': True, 'answer': str(error)}, error.status)
+                except (ValueError, OSError, sqlite3.Error):
+                    self.send_json({'error': True, 'answer': 'Task removal could not be confirmed. Refresh saved task privacy before retrying.'}, 503)
+                return
             if self.path.startswith(('/brain/', '/operations/')) or self.path == '/export/data':
                 if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
                     self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)

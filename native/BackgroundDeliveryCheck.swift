@@ -44,6 +44,21 @@ import Foundation
         check(quiet.next(now: now) == nil)
         quiet.preferenceUpdatePending = false
         check(quiet.next(now: now)?.id == "pending-save")
+        var input = BackgroundDelivery()
+        input.foregroundInputActive = true
+        input.enqueue(id: "during-dictation", text: "A background task completed", now: now)
+        check(!input.eligible && input.next(now: now) == nil && input.pending.count == 1)
+        // Releasing a follow-up/handing over PTT must not bypass another gate.
+        input.preferenceUpdatePending = true
+        input.foregroundInputActive = false
+        check(input.next(now: now) == nil && input.pending.count == 1)
+        input.preferenceUpdatePending = false
+        check(input.next(now: now.addingTimeInterval(1))?.id == "during-dictation")
+        check(input.next(now: now.addingTimeInterval(1)) == nil)
+        input.foregroundInputActive = true
+        input.enqueue(id: "expired-during-input", text: "An old update", now: now)
+        input.foregroundInputActive = false
+        check(input.next(now: now.addingTimeInterval(BackgroundDelivery.expiry)) == nil && input.pending.isEmpty)
         print("Background delivery policy checks: \(checks) passed")
     }
 }

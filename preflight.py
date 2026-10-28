@@ -32,7 +32,8 @@ LOCAL_TIMEOUT_S = server.CLI_CHECK_TIMEOUT_S
 MAX_RESPONSE_BYTES = 20_000_000
 SUMMARY_PRECISION = 2
 EXPECTED_FINISH_MS = 900
-OFFLINE_TIMEOUT_S = 30
+# The complete isolated suite now takes about 44 seconds on the discovered M1.
+OFFLINE_TIMEOUT_S = 180
 OPENAI_MODELS_URL = 'https://api.openai.com/v1/models'
 PLACEHOLDER_KEY = 'PUT-YOUR-KEY-HERE'
 BRAIN_QUESTION = 'Say ready in one short sentence.'
