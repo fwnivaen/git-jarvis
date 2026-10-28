@@ -4,6 +4,9 @@ import re
 import os
 import tempfile
 from pathlib import Path
+import urllib.parse
+import note_store
+import vault_files
 
 ROOT = Path(__file__).resolve().parent
 NOTES_DIR = ROOT / "notes"
@@ -27,23 +30,8 @@ def normalize(text):
     return " ".join(re.findall(r"\w+", text.casefold()))
 
 
-def read_notes(directory=NOTES_DIR):
-    directory = Path(directory).resolve()
-    if not directory.is_dir():
-        raise FileNotFoundError(NOTES_MISSING)
-    notes = []
-    for path in sorted(directory.rglob("*.md"), key=lambda p: p.relative_to(directory).as_posix().casefold()):
-        # Do not follow symlinks out of the notes tree.
-        if path.is_symlink() or directory not in path.resolve().parents:
-            continue
-        text = path.read_text(encoding="utf-8")
-        label = path.stem
-        if path.parent.name in ("captures", "imports") and text.startswith("# "):
-            label = text.splitlines()[0][2:].strip() or label
-        notes.append({"id": len(notes), "label": label, "_path": path.relative_to(directory).as_posix(),
-                      "edited_at": path.stat().st_mtime,
-                      "group": path.parent.name, "excerpt": text[:EXCERPT_CHARS],
-                      "text": text})
+def read_notes(directory=None):
+    notes, _, _ = vault_files.read_notes(NOTES_DIR if directory is None else directory)
     if (any(f"[[{CAPTURE_HUB_TITLE}]]" in n["text"] for n in notes)
             and not any(n["label"] == CAPTURE_HUB_TITLE for n in notes)):
         notes.append(capture_hub(len(notes)))
@@ -53,6 +41,8 @@ def read_notes(directory=NOTES_DIR):
 def make_graph(notes):
     nodes = [{key: note[key] for key in ("id", "label", "group", "excerpt")} for note in notes]
     for node, note in zip(nodes, notes):
+        if note.get('_path'):
+            node['stable_id'] = note_store.stable_id(note['_path'])
         if isinstance(note.get("edited_at"), (float, int)):
             node["edited_at"] = note["edited_at"]
         if note.get("capture_hub"):
@@ -61,10 +51,30 @@ def make_graph(notes):
     titles = [" " + normalize(n["label"]) + " " for n in notes]
     wikilinks = [{normalize(link.split("|")[0].split("#")[0])
                   for link in WIKILINK.findall(n["text"])} - {""} for n in notes]
+    # Resolve Obsidian folder paths/aliases only when the target is unambiguous.
+    identities = {}
+    for note in notes:
+        names = [note['label'], *note.get('aliases', [])]
+        if note.get('_path'):
+            names.append(str(Path(note['_path']).with_suffix('')))
+        for name in names:
+            identities.setdefault(normalize(name), set()).add(note['id'])
+    explicit = set()
+    for note in notes:
+        targets = [link.split('|')[0].split('#')[0] for link in WIKILINK.findall(note['text'])]
+        targets += [urllib.parse.unquote(link.split('#')[0]) for link in vault_files.MARKDOWN_LINK.findall(note['text'])]
+        for target in targets:
+            name = str(Path(target).with_suffix('')) if target.casefold().endswith('.md') else target
+            matches = identities.get(normalize(name), set())
+            if len(matches) == 1:
+                identifier = next(iter(matches))
+                if identifier != note['id']:
+                    explicit.add(tuple(sorted((note['id'], identifier))))
     links = []
     for left in range(len(notes)):
         for right in range(left + 1, len(notes)):
-            if (titles[left] in bodies[right] or titles[right] in bodies[left]
+            if ((notes[left]['id'], notes[right]['id']) in explicit
+                    or titles[left] in bodies[right] or titles[right] in bodies[left]
                     or wikilinks[left] & wikilinks[right]):
                 links.append({"source": left, "target": right})
     return {"nodes": nodes, "links": links}
@@ -89,10 +99,10 @@ def write_graph(graph, output=GRAPH_PATH):
             temporary.unlink(missing_ok=True)
 
 
-def build(directory=NOTES_DIR, output=GRAPH_PATH):
+def build(directory=None, output=None):
     notes = read_notes(directory)
     graph = make_graph(notes)
-    write_graph(graph, output)
+    write_graph(graph, GRAPH_PATH if output is None else output)
     return notes, graph
 
 

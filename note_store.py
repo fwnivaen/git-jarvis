@@ -3,6 +3,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+import vault_files
 
 MAX_NOTE_CHARS = 200_000
 MAX_NOTE_BYTES = 800_000
@@ -39,13 +40,14 @@ def locate(note, directory):
 
 def read(note, directory):
     path = locate(note, directory)
-    if path.stat().st_size > MAX_NOTE_BYTES:
-        raise NoteError("This note is too large for the editor.")
-    text = path.read_text(encoding="utf-8")
-    title = text.splitlines()[0][2:].strip() or path.stem if path.parent.name in ("captures", "imports") and text.startswith("# ") else path.stem
     identity = path.relative_to(Path(directory).resolve()).as_posix()
+    try:
+        text, info = vault_files.read_file(Path(directory).resolve(), identity)
+    except (vault_files.VaultError, UnicodeError) as error:
+        raise NoteError("This note cannot be read safely in the editor.") from error
+    title = text.splitlines()[0][2:].strip() or path.stem if path.parent.name in ("captures", "imports") and text.startswith("# ") else path.stem
     return dict(id=note["id"], title=title, group=note["group"],
-                text=text, stable_id=stable_id(identity), revision=revision(text, identity), edited_at=path.stat().st_mtime)
+                text=text, stable_id=stable_id(identity), revision=revision(text, identity), edited_at=info.st_mtime)
 
 
 def save(note, directory, text, expected_revision):
@@ -76,7 +78,7 @@ def save(note, directory, text, expected_revision):
             output.flush()
             os.fsync(output.fileno())
         # Check a second time after preparing the replacement to avoid stale edits.
-        if revision(path.read_text(encoding="utf-8"), identity) != expected_revision:
+        if read(note, directory)['revision'] != expected_revision:
             raise NoteError("The note changed while saving. Reopen it before retrying.")
         locate(note, directory)
         if os.stat(path.parent).st_ino != os.fstat(parent_fd).st_ino:

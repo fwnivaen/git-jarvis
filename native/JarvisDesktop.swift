@@ -58,11 +58,18 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     private var muteItem: NSMenuItem?
     private var backgroundSpeechItem: NSMenuItem?
     private var backgroundPauseItem: NSMenuItem?
+    private var handsFreeItem: NSMenuItem?
+    private var handsFreeStatusItem: NSMenuItem?
+    private var handsFree: HandsFreeController?
+    private var pushToTalkKeyHeld = false
+    private var voiceStartGeneration = 0
+    private var manualCapturePending = false
     private var workspaceObservers: [NSObjectProtocol] = []
     private var islandItem: NSMenuItem?
     private var askStarted = false
     private var taskWatcher: TaskWatcher?
     private let speechModelInstaller = SpeechModelInstaller()
+    private let deliveryPreferences = OperationsSpeechPreferences()
 
     init(mode: LaunchMode) {
         self.mode = mode
@@ -76,12 +83,12 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         island.enabled = UserDefaults.standard.object(forKey: "showJarvisIsland") as? Bool ?? true
         conversation.onPhase = { [weak self] phase in
             guard let self else { return }
-            let active = phase != .idle && phase != .preparing
-            self.hotkeys?.borrowPlainEscape(active)
+            self.handsFree?.conversationChanged(phase)
+            self.refreshEscapeBorrowing()
             if let listenItem = self.listenItem {
                 let listening = phase == .preparing || phase == .capturing
-                listenItem.title = listening ? "Finish listening" : "Start listening"
-                listenItem.isEnabled = listening || phase == .idle
+                listenItem.title = listening ? "Finish listening" : phase == .idle ? "Start listening" : "Cancel current turn"
+                listenItem.isEnabled = true
             }
             self.muteItem?.title = self.conversation.muted ? "Unmute replies" : "Mute replies"
             if case .ask = self.mode, self.askStarted, phase == .idle {
@@ -92,6 +99,19 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         case .normal:
             conversation.restoreBackgroundPause()
             installMenu()
+            let handsFree = HandsFreeController(island: island,
+                conversationIsIdle: { [weak self] in self?.conversation.phase == .idle },
+                awaitConversationCleanup: { [weak self] in await self?.conversation.waitForCaptureCleanup() },
+                submit: { [weak self] question in self?.conversation.ask(question) })
+            handsFree.onStatus = { [weak self] enabled, status in
+                self?.handsFreeItem?.title = enabled ? "Disable hands-free listening" : "Try hands-free (preview)…"
+                self?.handsFreeItem?.state = enabled ? .on : .off
+                self?.handsFreeStatusItem?.title = status
+                self?.statusItem?.button?.title = enabled ? "✦ 🎙" : "✦"
+                self?.statusItem?.button?.toolTip = enabled ? status : "Jarvis · Hold Control–Shift–Space to talk"
+                self?.refreshEscapeBorrowing()
+            }
+            self.handsFree = handsFree
             observeDeliveryAvailability()
             let watcher = TaskWatcher()
             watcher.onUpdate = { [weak self] update in
@@ -101,6 +121,12 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                 self?.island.backgroundWork(active)
             }
             watcher.onApproval = { [weak self] title in self?.island.approval(title) }
+            watcher.deliveryGeneration = { [weak self] in self?.deliveryPreferences.generation ?? 0 }
+            watcher.onDeliveryPolicy = { [weak self] policy, generation in
+                guard let self, self.deliveryPreferences.accept(policy, requestGeneration: generation) else { return }
+                self.conversation.applyDeliveryPolicy(policy)
+                self.backgroundSpeechItem?.state = self.conversation.backgroundSpeechEnabled ? .on : .off
+            }
             watcher.start()
             taskWatcher = watcher
             let keys = Hotkeys()
@@ -109,18 +135,23 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
                 self.diagnostics.notice("Hotkey pressed: \(id, privacy: .public)")
                 switch id {
                 case Hotkeys.pushToTalk:
-                    if self.conversation.phase == .idle {
-                        ReadySound.play()
-                        self.conversation.pressToTalk()
-                    }
-                case Hotkeys.cancel, Hotkeys.plainEscape: self.conversation.cancel()
+                    self.pushToTalkKeyHeld = true
+                    self.beginManualCapture(fromHotkey: true)
+                case Hotkeys.cancel, Hotkeys.plainEscape:
+                    self.cancelCurrentTurn()
                 case Hotkeys.mute: self.toggleMute()
                 default: break
                 }
             }
             keys.released = { [weak self] id in
                 self?.diagnostics.notice("Hotkey released: \(id, privacy: .public)")
-                if id == Hotkeys.pushToTalk { self?.conversation.releaseToTalk() }
+                if id == Hotkeys.pushToTalk, let self {
+                    self.pushToTalkKeyHeld = false
+                    self.voiceStartGeneration += 1
+                    self.manualCapturePending = false
+                    self.conversation.releaseToTalk()
+                    if self.conversation.phase == .idle { self.handsFree?.resumeAfterUnstartedPushToTalk() }
+                }
             }
             hotkeys = keys
             diagnostics.notice("Push-to-talk registration status: \(keys.pushToTalkStatus, privacy: .public)")
@@ -159,6 +190,15 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         listen.target = self
         menu.addItem(listen)
         listenItem = listen
+        let handsFree = NSMenuItem(title: "Try hands-free (preview)…",
+                                  action: #selector(toggleHandsFree), keyEquivalent: "")
+        handsFree.target = self
+        menu.addItem(handsFree)
+        handsFreeItem = handsFree
+        let handsFreeStatus = NSMenuItem(title: "Hands-free off", action: nil, keyEquivalent: "")
+        handsFreeStatus.isEnabled = false
+        menu.addItem(handsFreeStatus)
+        handsFreeStatusItem = handsFreeStatus
         let ask = NSMenuItem(title: "Ask Jarvis…", action: #selector(askFromMenu), keyEquivalent: "")
         ask.target = self
         menu.addItem(ask)
@@ -203,6 +243,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func askFromMenu() {
+        handsFree?.disable(reason: "Hands-free off for typed request")
         let alert = NSAlert()
         alert.messageText = "Ask Jarvis"
         alert.informativeText = "Your question is sent only to the local Jarvis server."
@@ -216,24 +257,101 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleListening() {
         switch conversation.phase {
         case .idle:
-            ReadySound.play()
-            conversation.pressToTalk()
+            if manualCapturePending {
+                cancelCurrentTurn()
+            } else { beginManualCapture(fromHotkey: false) }
         case .preparing, .capturing:
             conversation.releaseToTalk()
         case .finishing, .thinking, .speaking, .mutedReply:
-            break
+            cancelCurrentTurn()
         }
     }
 
+    private func refreshEscapeBorrowing() {
+        let active = conversation.phase != .idle && conversation.phase != .preparing
+        hotkeys?.borrowPlainEscape(active || handsFree?.hasActiveTurn == true)
+    }
+
+    private func cancelCurrentTurn() {
+        voiceStartGeneration += 1
+        manualCapturePending = false
+        handsFree?.disable()
+        conversation.cancel()
+    }
+
+    private func beginManualCapture(fromHotkey: Bool) {
+        guard conversation.phase == .idle, !manualCapturePending else { return }
+        guard let handsFree, handsFree.enabled || handsFree.needsCaptureHandoff else {
+            ReadySound.play()
+            conversation.pressToTalk()
+            return
+        }
+        voiceStartGeneration += 1
+        let current = voiceStartGeneration
+        manualCapturePending = true
+        handsFree.yieldForPushToTalk { [weak self] in
+            guard let self else { return }
+            // An obsolete completion must not resume wake capture underneath
+            // a newer PTT handoff. Key release already handles its own resume.
+            guard self.voiceStartGeneration == current else { return }
+            guard (!fromHotkey || self.pushToTalkKeyHeld), self.conversation.phase == .idle else {
+                self.manualCapturePending = false
+                if self.conversation.phase == .idle { self.handsFree?.resumeAfterUnstartedPushToTalk() }
+                return
+            }
+            self.manualCapturePending = false
+            ReadySound.play()
+            self.conversation.pressToTalk()
+        }
+    }
+
+    @objc private func toggleHandsFree() {
+        guard let handsFree else { return }
+        if handsFree.enabled { handsFree.disable(); return }
+        guard conversation.phase == .idle, !manualCapturePending, !conversation.muted else {
+            island.notice("Finish the current turn and unmute replies before enabling hands-free")
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Try hands-free listening for this session?"
+        alert.informativeText = "Jarvis will continuously transcribe your microphone on this Mac. Say “Hey Jarvis” and your question; only that question is sent to your local Jarvis server for a reply or action. After a reply, Jarvis listens for a follow-up for 6 seconds. The 🎙 menu-bar indicator stays visible. Cancel, mute, switching users, display or system sleep, or quitting turns hands-free off. Turn it off before locking your Mac; immediate screen-lock detection is not verified. It stays off after relaunch."
+        alert.addButton(withTitle: "Enable for this session")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { handsFree.enable() }
+    }
+
     @objc private func toggleMute() {
+        handsFree?.disable()
         conversation.toggleMute()
         muteItem?.title = conversation.muted ? "Unmute replies" : "Mute replies"
         diagnostics.notice("Replies muted: \(self.conversation.muted, privacy: .public)")
         island.notice(conversation.muted ? "Replies muted" : "Replies unmuted")
     }
     @objc private func toggleBackgroundSpeech() {
-        conversation.toggleBackgroundSpeech()
-        backgroundSpeechItem?.state = conversation.backgroundSpeechEnabled ? .on : .off
+        guard !deliveryPreferences.updating else { return }
+        let enabled = !conversation.backgroundSpeechEnabled
+        backgroundSpeechItem?.isEnabled = false
+        conversation.setBackgroundPreferencePending(true)
+        deliveryPreferences.setSpeech(enabled) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .saved(let snapshot):
+                self.conversation.setBackgroundSpeech(snapshot.settings.speakBackgroundUpdates)
+            case .legacy:
+                self.conversation.setBackgroundSpeech(enabled)
+            case .conflict(let current):
+                if let current, current.managed {
+                    self.conversation.setBackgroundSpeech(current.settings.speakBackgroundUpdates)
+                }
+                self.island.notice("Background speech settings changed elsewhere. Review the current choice and try again.")
+            case .failed:
+                self.island.notice("Background speech settings could not be saved. Your previous choice is unchanged.")
+            }
+            self.conversation.setBackgroundPreferencePending(false)
+            self.backgroundSpeechItem?.isEnabled = true
+            self.backgroundSpeechItem?.state = self.conversation.backgroundSpeechEnabled ? .on : .off
+            self.taskWatcher?.poll()
+        }
     }
     @objc private func toggleBackgroundPause() {
         conversation.toggleBackgroundPause()
@@ -246,9 +364,17 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             (NSWorkspace.sessionDidBecomeActiveNotification, true, nil),
             (NSWorkspace.screensDidSleepNotification, nil, false),
             (NSWorkspace.screensDidWakeNotification, nil, true),
+            (NSWorkspace.willSleepNotification, nil, false),
+            (NSWorkspace.didWakeNotification, nil, true),
         ]
         workspaceObservers = signals.map { name, sessionActive, displayAwake in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                if sessionActive == false || displayAwake == false {
+                    self?.voiceStartGeneration += 1
+                    self?.manualCapturePending = false
+                    self?.handsFree?.disable(reason: "Hands-free off while the session is unavailable")
+                    self?.conversation.cancel()
+                }
                 self?.conversation.setBackgroundAvailability(sessionActive: sessionActive, displayAwake: displayAwake)
             }
         }
@@ -277,6 +403,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         taskWatcher?.stop()
         for observer in workspaceObservers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         workspaceObservers.removeAll()
+        handsFree?.disable()
         conversation.cancel()
         NSApp.terminate(nil)
     }

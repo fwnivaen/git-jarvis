@@ -32,12 +32,20 @@ swiftc -target arm64-apple-macosx27.0 -parse-as-library \
 "$CHECK_ROOT/IslandLayerCheck"
 swiftc -target arm64-apple-macosx27.0 -parse-as-library \
   -module-cache-path "$JARVIS_SWIFT_MODULE_CACHE" \
-  native/TaskWatcher.swift native/TaskWatcherCheck.swift -o "$CHECK_ROOT/TaskWatcherCheck"
+  native/DeliveryPreferences.swift native/TaskWatcher.swift native/TaskWatcherCheck.swift -o "$CHECK_ROOT/TaskWatcherCheck"
 "$CHECK_ROOT/TaskWatcherCheck"
 swiftc -target arm64-apple-macosx27.0 -parse-as-library \
   -module-cache-path "$JARVIS_SWIFT_MODULE_CACHE" \
   native/BackgroundDelivery.swift native/BackgroundDeliveryCheck.swift -o "$CHECK_ROOT/BackgroundDeliveryCheck"
 "$CHECK_ROOT/BackgroundDeliveryCheck"
+swiftc -target arm64-apple-macosx27.0 -parse-as-library \
+  -module-cache-path "$JARVIS_SWIFT_MODULE_CACHE" \
+  native/DeliveryPreferences.swift native/DeliveryPreferencesCheck.swift -o "$CHECK_ROOT/DeliveryPreferencesCheck"
+"$CHECK_ROOT/DeliveryPreferencesCheck"
+swiftc -target arm64-apple-macosx27.0 -parse-as-library \
+  -module-cache-path "$JARVIS_SWIFT_MODULE_CACHE" \
+  native/HandsFreePolicy.swift native/HandsFreeCheck.swift -o "$CHECK_ROOT/HandsFreeCheck"
+"$CHECK_ROOT/HandsFreeCheck"
 export JARVIS_VOICE_APP_PATH="$CHECK_ROOT/Jarvis Voice.app"
 sh native/build_voice.sh
 "$JARVIS_VOICE_APP_PATH/Contents/MacOS/JarvisVoice" --voice-lock-protocol

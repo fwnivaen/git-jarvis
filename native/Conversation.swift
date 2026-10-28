@@ -59,6 +59,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var modernCapture: ModernCapture?
     private var captureStartup: Task<Void, Never>?
+    private var captureCleanup: Task<Void, Never>?
     private var networkTask: URLSessionDataTask?
     private var capturedPhrase = ""
     private var latestPhrase = ""
@@ -123,13 +124,16 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
 
     private func startCapture(_ current: Int) {
         guard phase == .preparing, buttonHeld else { return }
-        guard let voiceLock = VoiceLock() else {
-            fail(.microphoneFailure, "Another Jarvis voice session is using the microphone")
-            return
-        }
-        self.voiceLock = voiceLock
-        captureStartup = Task { @MainActor [weak self, voiceLock] in
+        let previousCleanup = captureCleanup
+        captureStartup = Task { @MainActor [weak self] in
+            await previousCleanup?.value
             guard let self else { return }
+            guard !Task.isCancelled, self.generation == current, self.phase == .preparing, self.buttonHeld else { return }
+            guard let voiceLock = VoiceLock() else {
+                self.fail(.microphoneFailure, "Another Jarvis voice session is using the microphone")
+                return
+            }
+            self.voiceLock = voiceLock
             defer {
                 // A cancelled startup retains ownership until it has stopped,
                 // so the next turn cannot open a second audio engine.
@@ -165,7 +169,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
                         })
                     guard !Task.isCancelled, self.generation == current,
                           self.phase == .preparing, self.buttonHeld else {
-                        capture.cancel()
+                        await capture.cancel().value
                         return
                     }
                     self.modernCapture = capture
@@ -432,10 +436,25 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func toggleBackgroundSpeech() {
-        backgroundSpeechEnabled.toggle()
+        setBackgroundSpeech(!backgroundSpeechEnabled)
+    }
+
+    func setBackgroundSpeech(_ enabled: Bool) {
+        backgroundSpeechEnabled = enabled
         UserDefaults.standard.set(backgroundSpeechEnabled, forKey: "speakBackgroundUpdates")
         if !backgroundSpeechEnabled { stopBackgroundSpeech() }
         scheduleBackground()
+    }
+
+    func applyDeliveryPolicy(_ policy: TaskDeliveryPolicy) {
+        background.quietHoursActive = policy.quietHoursActive
+        if policy.managed { setBackgroundSpeech(policy.speakBackgroundUpdates) }
+        refreshBackgroundEligibility()
+    }
+
+    func setBackgroundPreferencePending(_ pending: Bool) {
+        background.preferenceUpdatePending = pending
+        refreshBackgroundEligibility()
     }
 
     func backgroundUpdate(_ text: String, id: String = UUID().uuidString) {
@@ -510,9 +529,11 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func stopCapture() {
-        captureStartup?.cancel()
+        let retainedLock = voiceLock
+        let startup = captureStartup
+        startup?.cancel()
         captureStartup = nil
-        modernCapture?.cancel()
+        let analyzerCleanup = modernCapture?.cancel()
         modernCapture = nil
         if let engine {
             if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
@@ -525,6 +546,11 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         speechRequest = nil
         recognitionTask = nil
         voiceLock = nil
+        if startup != nil || analyzerCleanup != nil {
+            captureCleanup = HandsFreeHandoff.join([captureCleanup, startup, analyzerCleanup], retaining: retainedLock)
+        }
     }
+
+    func waitForCaptureCleanup() async { await captureCleanup?.value }
 
 }

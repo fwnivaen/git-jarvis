@@ -55,6 +55,7 @@ from zoneinfo import ZoneInfo
 import base64
 import binascii
 import http.cookies
+import hashlib
 import json
 import os
 import re
@@ -90,11 +91,20 @@ import task_status
 import local_clock
 import document_export
 import note_actions
+import preference_actions
 import health_readiness
+import obsidian_brain
+import vault_files
+import activity_feed
+import user_data_export
+import daily_health
+import delivery_policy
+import local_signals
 import usage_policy
 WATCH = watch.Watch()
 SENSORS = sensor_state.Sensors()
 ROOT = Path(__file__).resolve().parent
+BRAIN = obsidian_brain.BrainService(ROOT / '.local' / 'obsidian')
 VIEWER_DIR = ROOT / "viewer"
 CONFIG_PATH = ROOT / "config.json"
 HOST = "127.0.0.1"
@@ -148,6 +158,7 @@ UI_ASSETS = {
     "agents.js": "text/javascript", "agents.css": "text/css",
     "workflows.js": "text/javascript", "workflows.css": "text/css",
     "local-services.js": "text/javascript",
+    "brain-services.js": "text/javascript",
     "theme.js": "text/javascript", "ui.js": "text/javascript",
     "tokens.css": "text/css", "app.css": "text/css", "open-deck.css": "text/css",
     "Inter.woff2": "font/woff2", "JetBrainsMono.woff2": "font/woff2",
@@ -471,6 +482,11 @@ def words(text):
 
 
 def retrieve(question, history):
+    if BRAIN.active_path is not None:
+        refresh_brain_notes(force=True)
+        with INDEX_LOCK:
+            query = history[-1]['question'] + ' ' + question if words(question) & FOLLOWUP_WORDS and history else question
+            return BRAIN.search(query[:obsidian_brain.MAX_QUERY_CHARS], list(NOTES))
     settings, _ = ultra.Settings.read(ULTRA_CONFIG_PATH)
     if settings.enabled and settings.memory_enabled and settings.semantic_search_enabled:
         with INDEX_LOCK:
@@ -796,7 +812,8 @@ def answer_request(system, notes, history, question, image=None, webcam=False, a
         if workflow is not None or resume_run is not None:
             return {"answer": "Enable Ultra routing and its workflow features before starting or resuming a saved workflow.",
                 "nodes": [], "about_notes": False, "error": True}
-        return ask_brain(system, notes, history, question, image=image, webcam=webcam) if image is not None else ask_brain(system, notes, history, question)
+        result = ask_brain(system, notes, history, question, image=image, webcam=webcam) if image is not None else ask_brain(system, notes, history, question)
+        return bind_brain_sources(result, notes)
     if manual is not None and (workflow is not None or resume_run is not None):
         return {"answer": "Return to your normal Ultra brain before starting or resuming a workflow.",
             "nodes": [], "about_notes": False, "error": True}
@@ -805,10 +822,48 @@ def answer_request(system, notes, history, question, image=None, webcam=False, a
         system = system.replace("Never use tools, execute commands, inspect files, edit files, or browse the network.",
             "Use only the registered Jarvis tools for the user's request. Never execute commands or browse the network.")
     preferences = PREFERENCES.read() if settings.memory_enabled and settings.preferences_enabled else {}
-    return ULTRA.answer(settings, system, notes, history, question, image=image,
-        kind="webcam" if webcam else "screen" if image is not None else "chat",
-        manual_model=manual[1] if manual else None, automatic=automatic, watch_token=watch_token,
-        workflow=workflow, resume_run=resume_run, preferences=preferences)
+    # Keep the source receipt from this answer attached before another request
+    # can replace the shared engine's source list.
+    with ULTRA._lock:
+        result = ULTRA.answer(settings, system, notes, history, question, image=image,
+            kind="webcam" if webcam else "screen" if image is not None else "chat",
+            manual_model=manual[1] if manual else None, automatic=automatic, watch_token=watch_token,
+            workflow=workflow, resume_run=resume_run, preferences=preferences)
+        with ULTRA._source_lock:
+            sources = [dict(note) for note in getattr(ULTRA, '_sources', notes)]
+        return bind_brain_sources(result, sources)
+
+
+def bind_brain_sources(result, supplied):
+    """Citations bind source identities/revisions actually supplied to this answer."""
+    if BRAIN.active_path is None:
+        return result
+    refresh_brain_notes(force=True)
+    with INDEX_LOCK:
+        current = {note_store.stable_id(note['_path']): note for note in NOTES if note.get('_path')}
+        by_id = {}
+        for source in supplied:
+            prior = by_id.get(source['id'])
+            if prior is not None and (prior.get('_source_conflict') or source.get('_source_conflict')
+                    or (prior.get('stable_id'), prior.get('revision')) != (source.get('stable_id'), source.get('revision'))):
+                by_id[source['id']] = dict(prior, _source_conflict=True)
+            elif prior is None:
+                by_id[source['id']] = source
+        resolved, sources, changed = [], [], False
+        for identifier in result.get('nodes', []):
+            source = by_id.get(identifier, {})
+            stable, expected = source.get('stable_id'), source.get('revision')
+            note = current.get(stable)
+            if (note is None or source.get('_source_conflict') or expected != note_store.revision(note['text'], note['_path'])):
+                changed = True
+                continue
+            resolved.append(note['id'])
+            sources.append(BRAIN.source(note))
+        result.update(nodes=list(dict.fromkeys(resolved)), brain_sources=sources, sources_changed=changed)
+        if changed:
+            result.update(answer='A source note changed while I was preparing that answer, Sir. Please ask again using the current shared notes.',
+                nodes=[], brain_sources=[], about_notes=False, error=True)
+    return result
 
 
 MEMORY = ultra_memory.HybridMemory()
@@ -827,9 +882,12 @@ def ultra_settings():
 
 
 def tool_note_read(id):
+    refresh_brain_notes(force=True)
     with INDEX_LOCK:
         note = next(n for n in NOTES if n["id"] == id)
         result = note_store.read(note, build.NOTES_DIR)
+        if BRAIN.active_path is not None and vault_files.properties(result['text'])['private']:
+            raise ultra_tools.ToolError('That note is outside the shared brain scope.')
     result["truncated"] = len(result["text"]) > TOOL_NOTE_CHARS
     result["text"] = result["text"][:TOOL_NOTE_CHARS]
     return result
@@ -841,6 +899,8 @@ def tool_notes_search(query):
         for item in found:
             note = next(n for n in NOTES if n["id"] == item["id"])
             current = note_store.read(note, build.NOTES_DIR)
+            if BRAIN.active_path is not None and (vault_files.properties(current['text'])['private'] or current['revision'] != item['revision']):
+                raise ultra_tools.ToolError('The shared source changed. Refresh before using it.')
             item["revision"] = current["revision"]
             item["stable_id"] = current["stable_id"]
             item["text"] = item["text"][:TOOL_NOTE_CHARS]
@@ -943,7 +1003,8 @@ def tool_screen_control(action):
 TOOLS = ultra_tools.Registry(ultra_settings, {
     "notes_search": tool_notes_search, "note_read": tool_note_read, "notes_capture": tool_notes_capture,
     "note_write": tool_note_write, "preferences_get": lambda: {"preferences": PREFERENCES.read()},
-    "preferences_set": PREFERENCES.set, "preferences_forget": PREFERENCES.forget,
+    "preferences_set": lambda key, value: propose_preference(key, value),
+    "preferences_forget": lambda key: propose_preference(key, forget=True),
     "screen_watch_status": WATCH.state, "screen_watch_control": tool_screen_control,
     "document_import": tool_document_import})
 ULTRA.tool_layer = TOOLS
@@ -969,10 +1030,13 @@ TASK_API = task_api.TaskAPI(WORKFLOWS)
 NOTE_ACTIONS = None
 NOTE_ACTION_LOCK = threading.RLock()
 NOTE_ACTION_PATH = ROOT / '.local' / 'note-actions' / 'control.sqlite3'
+PREFERENCE_ACTIONS = None
+PREFERENCE_ACTION_PATH = ROOT / '.local' / 'preference-actions' / 'control.sqlite3'
 
 
 def read_action_note(identifier):
     # Review must use the full editor text, not the model tool's truncated excerpt.
+    refresh_brain_notes(force=True)
     with INDEX_LOCK:
         note = next(note for note in NOTES if note['id'] == identifier)
         return note_store.read(note, build.NOTES_DIR)
@@ -1000,6 +1064,34 @@ def note_action_catalog():
         'limitations': list(note_actions.LIMITATIONS)}
 
 
+def preference_actions_service(create=False):
+    global PREFERENCE_ACTIONS
+    with NOTE_ACTION_LOCK:
+        if PREFERENCE_ACTIONS is None and (create or PREFERENCE_ACTION_PATH.exists()):
+            PREFERENCE_ACTIONS = preference_actions.PreferenceActions(PREFERENCE_ACTION_PATH, PREFERENCES)
+        return PREFERENCE_ACTIONS
+
+
+def preference_action_catalog():
+    service = preference_actions_service()
+    return service.catalog() if service else {'items': [], 'pending_count': 0,
+        'limitations': list(preference_actions.LIMITATIONS)}
+
+
+def action_catalog():
+    notes, preferences = note_action_catalog(), preference_action_catalog()
+    return {'items': [dict(item, kind='notes') for item in notes['items']] + preferences['items'],
+        'pending_count': notes['pending_count'] + preferences['pending_count']}
+
+
+def propose_preference(key, value=None, forget=False):
+    service = preference_actions_service(create=True)
+    proposal = service.propose('forget' if forget else 'set', key, value,
+        revision=service.snapshot()['revision'])
+    return {'saved': False, 'approval_required': True, 'approval': proposal,
+        'message': 'Preference change queued. Review and approve the exact change in Work before it is saved.'}
+
+
 def readiness_snapshot():
     # Missing/private config never prevents the setup page from explaining readiness.
     backend = None
@@ -1015,6 +1107,83 @@ def readiness_snapshot():
     value['side_effects']['config_reads'] = True
     value['side_effects']['settings_reads'] = True
     return value
+
+
+def refresh_brain_notes(force=False):
+    """Refresh the same graph/tool source snapshot; never serve stale private/deleted notes."""
+    global NOTES
+    if BRAIN.active_path is None:
+        return False
+    with INDEX_LOCK:
+        notes = BRAIN.refresh(force=force)
+        if notes is None:
+            return False
+        if (any(f'[[{build.CAPTURE_HUB_TITLE}]]' in note['text'] for note in notes)
+                and not any(note['label'] == build.CAPTURE_HUB_TITLE for note in notes)):
+            notes.append(build.capture_hub(len(notes)))
+        graph = build.make_graph(notes)
+        build.write_graph(graph)
+        NOTES = notes
+        return True
+
+
+def configure_brain_startup():
+    """Select one source scope before admission, and namespace its private operation state."""
+    global MEMORY, PREFERENCES, NOTE_ACTION_PATH, PREFERENCE_ACTION_PATH
+    path = BRAIN.activate()
+    if path is None:
+        return False
+    build.NOTES_DIR = path
+    namespace = hashlib.sha256(str(path).encode()).hexdigest()
+    private = ROOT / '.local' / 'vaults' / namespace
+    MEMORY = ultra_memory.HybridMemory(root=private / 'memory')
+    PREFERENCES = ultra_memory.Preferences(private / 'preferences.json')
+    NOTE_ACTION_PATH = private / 'note-actions' / 'control.sqlite3'
+    PREFERENCE_ACTION_PATH = private / 'preference-actions' / 'control.sqlite3'
+    native_tool_routes.JOURNAL_DIR = private / 'native-tools'
+    ultra_tools.JOURNAL_DIR = private / 'tools'
+    WORKFLOWS.root = private / 'workflows'
+    module = ULTRA._workflow_module()
+    if module is not None:
+        ULTRA._store = module.WorkflowStore(private / 'runs')
+    return True
+
+
+OPERATIONS_LOCK = threading.RLock()
+OPERATIONS = daily_health.DailyHealthScheduler(ROOT / '.local' / 'operations', readiness_snapshot,
+    signal_provider=lambda: local_signals.collect(enabled=True))
+ACTIVITY = activity_feed.ActivityFeed(workflows=lambda: WORKFLOWS.catalog(), approvals=action_catalog)
+
+
+def operations_snapshot(include_signals=False):
+    with OPERATIONS_LOCK:
+        value = OPERATIONS.status()
+        value['revision'] = hashlib.sha256(json.dumps(value['settings'], sort_keys=True).encode()).hexdigest()
+        value['managed'] = (OPERATIONS.store.root / 'settings.json').is_file()
+        if include_signals:
+            value['signals'] = local_signals.collect(enabled=value['settings']['local_signals_enabled'])
+        return value
+
+
+def background_policy():
+    state = operations_snapshot()
+    settings = state['settings']
+    return {'schema_version': 1, 'managed': state['managed'], 'revision': state['revision'],
+        'quiet_hours_active': delivery_policy.quiet_now(enabled=settings['quiet_hours_enabled'],
+            start=settings['quiet_start'], end=settings['quiet_end']),
+        'speak_background_updates': settings['speak_background_updates']}
+
+
+def export_service():
+    def indexed():
+        refresh_brain_notes(force=True)
+        with INDEX_LOCK:
+            return [dict(note) for note in NOTES]
+    def settings():
+        return ultra_settings()
+    return user_data_export.UserDataExport(build.NOTES_DIR, indexed, PREFERENCES.read, settings,
+        workflows=lambda: WORKFLOWS.catalog(), activity=ACTIVITY.snapshot,
+        brain_settings=BRAIN.settings, operations_settings=lambda: operations_snapshot()['settings'])
 
 class GalaxyServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -1067,11 +1236,53 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"answer": "Local requests only.", "nodes": []}, 403)
             return
         path = urllib.parse.urlparse(self.path).path
+        if path in ('/system', '/notes/graph', '/graph-data.js', '/note'):
+            try:
+                refresh_brain_notes(force=path == '/note')
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({'error': True, 'answer': 'The shared brain could not be refreshed. Check the vault before retrying.'}, 503)
+                return
+        if path == '/brain':
+            try:
+                self.send_bytes(json.dumps(BRAIN.status()).encode(), 'application/json', head=head)
+            except (ValueError, OSError):
+                self.send_json({'error': True, 'answer': 'The private brain settings need attention.'}, 503)
+            return
+        if path == '/operations':
+            self.send_bytes(json.dumps(operations_snapshot(include_signals=not head)).encode(), 'application/json', head=head)
+            return
+        if path == '/activity':
+            try:
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                limit = int(query.get('limit', [str(activity_feed.DEFAULT_ITEMS)])[0])
+                self.send_bytes(json.dumps(ACTIVITY.snapshot(limit=limit)).encode(), 'application/json', head=head)
+            except (ValueError, OSError):
+                self.send_json({'error': True, 'answer': 'Recent activity could not be read.'}, 400)
+            return
         if path == '/health':
             try:
                 self.send_bytes(json.dumps(readiness_snapshot()).encode(), 'application/json', head=head)
             except (ValueError, OSError):
                 self.send_json({'error': True, 'answer': 'Readiness could not be checked. No setup changes were made.'}, 503)
+            return
+        if path in ('/preferences', '/preference-actions'):
+            try:
+                identifier = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get('id', [None])[0]
+                service = preference_actions_service()
+                if path == '/preferences':
+                    value = preference_actions.PreferenceState(PREFERENCES).snapshot()
+                    value['limitations'] = list(preference_actions.LIMITATIONS)
+                elif identifier is None:
+                    value = preference_action_catalog()
+                elif service is not None:
+                    value = service.get(identifier)
+                else:
+                    raise preference_actions.PreferenceActionError('Unknown preference action.', 404)
+                self.send_bytes(json.dumps(value).encode(), 'application/json', head=head)
+            except preference_actions.PreferenceActionError as error:
+                self.send_json({'error': True, 'answer': str(error)}, error.status)
+            except (ValueError, OSError, sqlite3.Error):
+                self.send_json({'error': True, 'answer': 'The private preference decision store is unavailable.'}, 503)
             return
         if path == '/approvals':
             try:
@@ -1100,6 +1311,11 @@ class Handler(BaseHTTPRequestHandler):
                     value['note_actions'] = {'pending_count': approvals['pending_count'],
                         'items': [{'id': item['id'], 'status': item['status']} for item in approvals['items']
                             if item['status'] == 'pending']}
+                    combined = action_catalog()
+                    value['action_approvals'] = {'pending_count': combined['pending_count'],
+                        'items': [{'id': item['id'], 'kind': item['kind'], 'status': item['status']}
+                            for item in combined['items'] if item['status'] == 'pending']}
+                    value['delivery_policy'] = background_policy()
                 self.send_bytes(json.dumps(value).encode(), "application/json", head=head)
             except workflow_runtime.WorkflowError as error:
                 self.send_json({"error": True, "answer": str(error)}, error.status)
@@ -1134,6 +1350,7 @@ class Handler(BaseHTTPRequestHandler):
             settings = ultra_settings()
             enabled = settings.enabled and settings.memory_enabled
             self.send_bytes(json.dumps({"enabled": enabled, "semantic": MEMORY.status(),
+                "source": "obsidian" if BRAIN.active_path is not None else "original_notes",
                 "imports_enabled": settings.enabled and settings.document_import_enabled,
                 "preferences_enabled": enabled and settings.preferences_enabled,
                 "preferences": PREFERENCES.read() if enabled and settings.preferences_enabled else {},
@@ -1173,6 +1390,9 @@ class Handler(BaseHTTPRequestHandler):
                     stable = query.get("stable", [None])[0]
                     note = next(n for n in NOTES if ((n.get("_path") and note_store.stable_id(n["_path"]) == stable) if stable else n["id"] == identifier))
                     result = note_store.read(note, build.NOTES_DIR)
+                    source = BRAIN.source(note)
+                    if source is not None:
+                        result['obsidian_uri'] = source['uri']
                 self.send_bytes(json.dumps(result).encode(), "application/json", head=head)
             except (ValueError, StopIteration, OSError):
                 self.send_json({"error": True, "answer": "This note file is unavailable."}, 404)
@@ -1239,7 +1459,7 @@ class Handler(BaseHTTPRequestHandler):
             WORKFLOWS.stream_slots.release()
 
     def do_POST(self):
-        if self.path not in ("/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
+        if self.path not in ("/preference-actions/propose", "/preference-actions/decide", "/preference-actions/undo", "/brain/setup", "/brain/settings", "/brain/search", "/brain/refresh", "/brain/disconnect", "/operations/settings", "/operations/run", "/export/data", "/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
             self.send_json({"answer": "Not found.", "nodes": []}, 404)
             return
         if not self.local_request():
@@ -1253,6 +1473,93 @@ class Handler(BaseHTTPRequestHandler):
             if not 0 < length <= (document_export.MAX_REQUEST_BYTES if self.path == "/export/word" else MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path in ("/note", "/approvals/propose") else MAX_VOICE_REQUEST_BYTES if self.path == "/voice/render" else MAX_REQUEST_BYTES):
                 raise ValueError
             body = json.loads(self.rfile.read(length))
+            if self.path.startswith(('/brain/', '/operations/')) or self.path == '/export/data':
+                if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
+                    self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)
+                    return
+                try:
+                    if not isinstance(body, dict):
+                        raise ValueError('Send the fields for this local operation.')
+                    if self.path == '/export/data':
+                        if set(body) != {'sections'}:
+                            raise ValueError('Select the data sections to export.')
+                        output = export_service().create(body['sections'])
+                        self.send_bytes(output, user_data_export.CONTENT_TYPE, attachment=user_data_export.FILENAME)
+                    elif self.path == '/operations/settings':
+                        if set(body) != {'settings', 'expected_revision'} or not isinstance(body['settings'], dict) or not isinstance(body['expected_revision'], str):
+                            raise ValueError('Read local settings before updating them.')
+                        with OPERATIONS_LOCK:
+                            current = operations_snapshot()
+                            if body['expected_revision'] != current['revision']:
+                                self.send_json({'error': True, 'answer': 'Settings changed. Review the current choices before retrying.', 'current': current}, 409)
+                                return
+                            OPERATIONS.configure(body['settings'])
+                            self.send_json(operations_snapshot())
+                    elif self.path == '/operations/run':
+                        if body:
+                            raise ValueError('No arguments are accepted for the local health check.')
+                        self.send_json(OPERATIONS.run_now())
+                    elif self.path == '/brain/setup':
+                        if body != {'confirmed': True} or type(body.get('confirmed')) is not bool:
+                            raise ValueError('Confirm the proposed new brain folder before preparing it.')
+                        BRAIN.prepare_vault(BRAIN.default_vault)
+                        self.send_json(BRAIN.configure(vault_path=BRAIN.default_vault))
+                    elif self.path == '/brain/disconnect':
+                        if body != {'confirmed': True} or type(body.get('confirmed')) is not bool:
+                            raise ValueError('Confirm disconnecting the brain at the next restart.')
+                        self.send_json(BRAIN.disconnect())
+                    elif self.path == '/brain/settings':
+                        if set(body) != {'context_chars'}:
+                            raise ValueError('Set only the source-passage budget here.')
+                        if type(body['context_chars']) is not int:
+                            raise ValueError
+                        self.send_json(BRAIN.configure(context_chars=body['context_chars']))
+                    elif self.path == '/brain/refresh':
+                        if body:
+                            raise ValueError('No arguments are accepted for the brain refresh.')
+                        refresh_brain_notes(force=True)
+                        self.send_json(BRAIN.status())
+                    else:
+                        if set(body) != {'query'}:
+                            raise ValueError('Supply only a local note search.')
+                        obsidian_brain.query_words(body['query'])
+                        refresh_brain_notes(force=True)
+                        with INDEX_LOCK:
+                            found = BRAIN.search(body['query'], list(NOTES))
+                            if found is None:
+                                raise ValueError('Prepare and activate the shared brain before searching it.')
+                            by_id = {note['id']: note for note in NOTES}
+                            items = [dict(item, source=BRAIN.source(by_id[item['id']])) for item in found]
+                        self.send_json({'schema_version': 1, 'items': items, 'model_calls': 0})
+                except user_data_export.ExportError as error:
+                    self.send_json({'error': True, 'answer': str(error)}, error.status)
+                except (ValueError, OSError, sqlite3.Error):
+                    self.send_json({'error': True, 'answer': 'The local operation could not be completed. Check its fields and private storage; existing notes were preserved.'}, 400)
+                return
+            if self.path.startswith('/preference-actions/'):
+                if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
+                    self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)
+                    return
+                try:
+                    allowed = {'operation', 'key', 'value', 'revision', 'request_key'} if self.path.endswith('/propose') else {'id', 'fingerprint', 'decision'} if self.path.endswith('/decide') else {'id', 'fingerprint'}
+                    if not isinstance(body, dict) or set(body) - allowed:
+                        raise preference_actions.PreferenceActionError('Send only the fields for this preference decision.', 400)
+                    service = preference_actions_service(create=self.path.endswith('/propose'))
+                    if service is None:
+                        raise preference_actions.PreferenceActionError('Unknown preference action.', 404)
+                    if self.path.endswith('/propose'):
+                        result = service.propose(body.get('operation'), body.get('key'), body.get('value'),
+                            body.get('revision'), body.get('request_key'))
+                    elif self.path.endswith('/decide'):
+                        result = service.decide(body.get('id'), body.get('fingerprint'), body.get('decision'))
+                    else:
+                        result = service.undo(body.get('id'), body.get('fingerprint'))
+                    self.send_json(result)
+                except preference_actions.PreferenceActionError as error:
+                    self.send_json({'error': True, 'answer': str(error)}, error.status)
+                except (ValueError, OSError, sqlite3.Error):
+                    self.send_json({'error': True, 'answer': 'The preference decision could not be confirmed. Inspect memory before retrying.'}, 503)
+                return
             if self.path.startswith('/approvals/'):
                 if self.headers.get('Origin') != 'http://' + self.headers.get('Host', ''):
                     self.send_json({'error': True, 'answer': 'Local viewer requests only.'}, 403)
@@ -1347,7 +1654,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not forgetting:
                             arguments["value"] = body.get("value")
                         result = native_tool_routes.invoke("preferences_forget" if forgetting else "preferences_set", arguments,
-                            PREFERENCES.forget if forgetting else PREFERENCES.set,
+                            (lambda key: propose_preference(key, forget=True)) if forgetting else (lambda key, value: propose_preference(key, value)),
                             properties={name: ultra_tools.STRING for name in arguments}, body=body, duration_s=BRAIN_TIMEOUT_S)
                     else:
                         if not settings.enabled or not settings.document_import_enabled:
@@ -1435,6 +1742,17 @@ class Handler(BaseHTTPRequestHandler):
             if clock_reply is not None:
                 self.send_json(clock_reply)
                 return
+            if BRAIN.active_path is not None:
+                try:
+                    refresh_brain_notes(force=True)
+                    with INDEX_LOCK:
+                        local_reply = BRAIN.direct_answer(question, list(NOTES))
+                    if local_reply is not None:
+                        self.send_json(local_reply)
+                        return
+                except (ValueError, OSError, sqlite3.Error):
+                    self.send_json({'error': True, 'answer': 'The shared brain could not be refreshed. No model request was sent.', 'nodes': []}, 503)
+                    return
         if self.path == "/model" or (self.path in ("/chat", "/see") and is_model_command(question)):
             try:
                 result = swap_model(question)
@@ -1502,18 +1820,25 @@ class Handler(BaseHTTPRequestHandler):
                     SESSIONS[sid] = {"history": [], "seen": now}
                 history = list(SESSIONS[sid]["history"])
             notes = retrieve(question, history)
+            if BRAIN.active_path is not None:
+                history = BRAIN.bounded_history(history)
             start = time.monotonic()
             eyes = SENSORS.state()
             eye_status = {key: eyes[key] for key in ('eyes_active', 'present', 'head_down', 'slouched')}
             system = SYSTEM_PROMPT + " Current local posture status (no image): " + json.dumps(eye_status)
             options = {name: body[name] for name in ("workflow", "resume_run") if body.get(name) is not None}
             result = apply_model_control(answer_request(system, notes, history, question, **options))
+            if BRAIN.active_path is not None:
+                result['local_memory'] = {'source': 'obsidian', 'selected_source_chars': sum(len(note['text']) for note in notes),
+                    'source_budget_chars': BRAIN.settings()['context_chars'], 'model_calls': 'see_backend_usage'}
             result["elapsed_s"] = round(time.monotonic() - start, TIME_PRECISION)
             if not result.get("error"):
                 with SESSION_LOCK:
                     SESSIONS[sid] = {"seen": time.monotonic(), "history":
                                     (history + [{"question": question, "answer": result["answer"]}])[-HISTORY_TURNS:]}
             self.send_json(result, 503 if result.get("error") else 200, cookie=sid)
+        except (obsidian_brain.BrainError, vault_files.VaultError, OSError, sqlite3.Error):
+            self.send_json({'error': True, 'answer': 'The shared notes changed or became unavailable. Refresh before retrying.', 'nodes': []}, 503)
         finally:
             BRAIN_SLOTS.release()
             CHAT_SLOTS.release()
@@ -1525,6 +1850,11 @@ def main():
     WORKFLOWS.redactor = workflow_runtime.Redactor(value for key, value in load_config().items() if "key" in key.lower())
     ACTIVE_BRAIN = None
     refresh_router_catalog(load_config())
+    try:
+        configure_brain_startup()
+    except (ValueError, OSError, sqlite3.Error):
+        print('The selected brain could not be opened safely. Restore its folder or disconnect it before restarting.', flush=True)
+        raise SystemExit(1) from None
     try:
         NOTES, graph = build.build()
     except FileNotFoundError:
@@ -1539,17 +1869,24 @@ def main():
         print(f"Cannot start on port {PORT}. Close the other process using it and try again.")
         raise SystemExit(1) from None
     print(f"Jarvis: http://{HOST}:{PORT} — {len(NOTES)} notes, {len(graph['links'])} connections", flush=True)
+    if BRAIN.active_path is not None:
+        refresh_brain_notes(force=True)
+    OPERATIONS.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nJarvis stopped.")
     finally:
+        OPERATIONS.stop()
         WORKFLOWS.close()
         if NOTE_ACTIONS is not None:
             NOTE_ACTIONS.close()
+        if PREFERENCE_ACTIONS is not None:
+            PREFERENCE_ACTIONS.close()
         ULTRA.close()
         CODEX_USAGE.close()
         MEMORY.close()
+        BRAIN.close()
         server.server_close()
 
 

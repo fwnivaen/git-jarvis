@@ -16,7 +16,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSUIElement</key><true/>
 <key>LSMinimumSystemVersion</key><string>27.0</string>
-<key>NSMicrophoneUsageDescription</key><string>Jarvis listens only while you hold the push-to-talk keys.</string>
+<key>NSMicrophoneUsageDescription</key><string>Jarvis listens while you hold push-to-talk or explicitly enable hands-free listening for this session.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>Jarvis transcribes your speech on this Mac.</string>
 </dict></plist>
 PLIST
@@ -25,10 +25,10 @@ swiftc -target arm64-apple-macosx27.0 -parse-as-library \
   native/IslandCore.swift native/IslandMotion.swift native/MiniOrb.swift \
   native/IslandText.swift native/IslandLayers.swift native/IslandViews.swift native/Island.swift native/OrbMetal.swift \
   native/IslandDemo.swift native/LiveTextEvidence.swift native/Sounds.swift native/Hotkeys.swift \
-  native/Conversation.swift native/ModernSpeech.swift native/SpeechModelInstaller.swift \
+  native/Conversation.swift native/ModernSpeech.swift native/HandsFreePolicy.swift native/HandsFree.swift native/SpeechModelInstaller.swift \
   native/TranscriberSmoke.swift \
   native/VoiceLock.swift native/MicrophoneCheck.swift \
-  native/TaskWatcher.swift native/BackgroundDelivery.swift native/JarvisDesktop.swift \
+  native/TaskWatcher.swift native/BackgroundDelivery.swift native/DeliveryPreferences.swift native/JarvisDesktop.swift \
   -o "$APP/Contents/MacOS/JarvisDesktop" \
   -framework AppKit -framework AVFoundation -framework Speech -framework Carbon -framework MetalKit
 codesign --force --sign - "$APP" >/dev/null

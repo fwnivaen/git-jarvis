@@ -15,3 +15,12 @@
 .workflow-answer{margin-top:22px;padding:20px;border-left:3px solid var(--accent);background:var(--surface-3);border-radius:8px}.workflow-answer h3{margin:0 0 12px;font-size:15px}.workflow-answer p{font-size:14px;line-height:1.8}.workflow-sources{display:flex;gap:12px;flex-wrap:wrap;font-size:12px}.workflow-sources a{color:var(--accent)}
 .workflow-events{margin-top:22px;font:11px/1.8 var(--mono)}.workflow-events ol{max-height:var(--wf-event-height);overflow:auto;padding-left:20px;color:var(--text-secondary)}.workflow-error{color:var(--warn);font-size:12px;line-height:1.7}.workflow-empty{font-size:12px;color:var(--text-secondary);line-height:1.7}.workflow-detail{min-width:0}.workflow-state[data-state=complete]{color:var(--accent)}
 @media(max-width:900px){.workflow-console{padding:16px}.workflow-layout{grid-template-columns:1fr}.workflow-history{max-height:180px;overflow:auto}.workflow-progress li{font-size:8px}.workflow-run-heading h3{max-width:100%}.workflow-engine{display:none}}
+
+/* Shared memory controls remain legible in the compact browser panel. */
+.local-service .answer-meta{color:var(--text-secondary);font-size:var(--type-xs);line-height:var(--line-height)}
+.local-service .card-actions{flex-wrap:wrap}
+.local-service .control{height:auto;min-height:var(--touch-target);padding:var(--space-2) var(--space-3);color:var(--text-primary)}
+.local-service input:not([type="checkbox"]),.local-service select{box-sizing:border-box;max-width:100%;min-width:0;min-height:var(--touch-target);padding:var(--space-2);border:var(--hairline) solid var(--stroke-default);border-radius:var(--radius-button);background:var(--surface-1);color:var(--text-primary);font:inherit}
+.brain-controls{flex-wrap:wrap}.brain-budget{flex-basis:100%;flex-wrap:wrap}.brain-budget select{flex-shrink:0}
+.brain-search,.preference-form{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-block:var(--space-4)}
+.brain-search input,.preference-form input{flex:1 1 var(--deck-legend-width)}

@@ -43,9 +43,9 @@ SPECS = (
     spec("note_write", "Replace a note using the revision from note_read. Use only for a user-requested edit.",
         {"id": INTEGER, "text": STRING, "revision": STRING}, ("id", "text", "revision"), True),
     spec("preferences_get", "Read the user's explicitly saved preferences.", feature="preferences_enabled"),
-    spec("preferences_set", "Remember a preference explicitly supplied by the user. Never save credentials.",
+    spec("preferences_set", "Queue an explicitly requested preference for review in Work. It is saved only after approval. Never save credentials.",
         {"key": STRING, "value": STRING}, ("key", "value"), True, "preferences_enabled"),
-    spec("preferences_forget", "Forget one preference at the user's request.", {"key": STRING}, ("key",), True, "preferences_enabled"),
+    spec("preferences_forget", "Queue forgetting an explicitly requested preference for review in Work; removal requires approval.", {"key": STRING}, ("key",), True, "preferences_enabled"),
     spec("screen_watch_status", "Read whether screen watch is active; this does not capture a screen."),
     spec("screen_watch_control", "Request screen watch start or stop. Starting still needs the browser's display-sharing permission.",
         {"action": {"type": "string", "enum": ["start", "stop"]}}, ("action",), True),
@@ -115,7 +115,7 @@ class ToolSession:
     A crash after a pending record is saved leaves an uncertain operation. Recovery
     refuses to replay it automatically; a fresh user request can resolve it.
     """
-    def __init__(self, registry, identifier=None, root=JOURNAL_DIR, permissions=None, cancel=None, request_fingerprint=None):
+    def __init__(self, registry, identifier=None, root=None, permissions=None, cancel=None, request_fingerprint=None):
         self.registry = registry
         self.cancel = cancel
         self.close_requested = False
@@ -125,7 +125,7 @@ class ToolSession:
         self.identifier = identifier or secrets.token_hex(TOOL_SESSION_ID_BYTES)
         if len(self.identifier) != TOOL_SESSION_ID_CHARS or any(c not in "0123456789abcdef" for c in self.identifier):
             raise ToolError("Invalid tool session.")
-        self.path = Path(root) / (self.identifier + ".json")
+        self.path = Path(JOURNAL_DIR if root is None else root) / (self.identifier + ".json")
         self.lock = threading.RLock()
         self.entries, self.count = {}, 0
         try:

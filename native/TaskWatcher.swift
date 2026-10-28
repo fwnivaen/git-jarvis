@@ -4,7 +4,12 @@ struct WorkflowCatalog: Decodable {
     let active: String?
     let runs: [WorkflowRun]
     let noteActions: NoteActionCatalog?
-    enum CodingKeys: String, CodingKey { case active, activeIDs = "active_ids", runs, tasks, noteActions = "note_actions" }
+    let actionApprovals: NoteActionCatalog?
+    let deliveryPolicy: TaskDeliveryPolicy?
+    enum CodingKeys: String, CodingKey {
+        case active, activeIDs = "active_ids", runs, tasks, noteActions = "note_actions", deliveryPolicy = "delivery_policy"
+        case actionApprovals = "action_approvals"
+    }
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let activeIDs = try container.decodeIfPresent([String].self, forKey: .activeIDs)
@@ -12,6 +17,10 @@ struct WorkflowCatalog: Decodable {
         if container.contains(.tasks) { runs = try container.decode([WorkflowRun].self, forKey: .tasks) }
         else { runs = try container.decode([WorkflowRun].self, forKey: .runs) }
         noteActions = try container.decodeIfPresent(NoteActionCatalog.self, forKey: .noteActions)
+        actionApprovals = try container.decodeIfPresent(NoteActionCatalog.self, forKey: .actionApprovals)
+        // A missing or malformed optional policy cannot erase the last accepted
+        // quiet gate or overwrite a legacy client's local speech preference.
+        deliveryPolicy = try? container.decode(TaskDeliveryPolicy.self, forKey: .deliveryPolicy)
     }
 }
 
@@ -50,12 +59,15 @@ final class TaskWatcher {
     var onUpdate: (WorkflowUpdate) -> Void = { _ in }
     var onActivity: (Bool) -> Void = { _ in }
     var onApproval: (String?) -> Void = { _ in }
+    var deliveryGeneration: () -> Int = { 0 }
+    var onDeliveryPolicy: (TaskDeliveryPolicy, Int) -> Void = { _, _ in }
     private var seen: [String: String] = [:]
     private var lastBusy: Bool?
     private var lastActivity: Bool?
     private var lastApproval: String?
     private var initialized = false
     private var stopped = false
+    private var pollGeneration = 0
     private var timer: Timer?
     private var useLegacyEndpoint = false
     private let session: URLSession
@@ -74,11 +86,17 @@ final class TaskWatcher {
 
     func poll() {
         guard !stopped else { return }
+        timer?.invalidate()
+        pollGeneration += 1
+        let currentPoll = pollGeneration
         var request = URLRequest(url: useLegacyEndpoint ? fallbackEndpoint : catalogEndpoint)
+        let policyGeneration = deliveryGeneration()
         request.timeoutInterval = Self.timeout
         session.dataTask(with: request) { [weak self] data, response, _ in
             DispatchQueue.main.async {
-                guard let self, !self.stopped else { return }
+                // A manual refresh can overlap a prior scheduled request. Its
+                // older response cannot undo newer quiet or speech settings.
+                guard let self, !self.stopped, currentPoll == self.pollGeneration else { return }
                 if let http = response as? HTTPURLResponse, http.statusCode == 404, !self.useLegacyEndpoint {
                     self.useLegacyEndpoint = true
                     self.poll()
@@ -93,8 +111,16 @@ final class TaskWatcher {
                 let workActive = catalog.active != nil || catalog.runs.contains {
                     !Self.terminalStatuses.contains($0.status)
                 }
-                let pending = catalog.noteActions?.items.filter { $0.status == "pending" }.count ?? 0
-                let approval = pending > 0 ? (pending == 1 ? "A note edit needs review" : "\(pending) note edits need review") : nil
+                if !self.useLegacyEndpoint, let policy = catalog.deliveryPolicy {
+                    self.onDeliveryPolicy(policy, policyGeneration)
+                }
+                let pending = (catalog.actionApprovals ?? catalog.noteActions)?.items.filter { $0.status == "pending" }.count ?? 0
+                let approval: String?
+                if catalog.actionApprovals != nil {
+                    approval = pending > 0 ? (pending == 1 ? "A note or preference change needs review" : "\(pending) note or preference changes need review") : nil
+                } else {
+                    approval = pending > 0 ? (pending == 1 ? "A note edit needs review" : "\(pending) note edits need review") : nil
+                }
                 if self.lastApproval != approval {
                     self.lastApproval = approval
                     self.onApproval(approval)

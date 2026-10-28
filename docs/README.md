@@ -15,6 +15,9 @@
 | [Execution upgrade evidence](upgrade-evidence.md) | Baseline, actual commands, live observations and limitations |
 | [Execution contracts](upgrade-contracts.md) | Ownership, scoped tools, workspace isolation and learning boundaries |
 | [Evaluation protocol](upgrade-evaluation.md) | Topic-disjoint five-arm comparison, costs, validators and promotion criteria |
+| [Obsidian Brain](OBSIDIAN-BRAIN.md) | Shared local notes, usage controls, privacy, setup and limits |
+| [Remaining build plan](BUILD-PLAN.md) | Ordered implementation and concrete acceptance gates |
+| [Local controls](LOCAL-CONTROLS.md) | Voice, previews, exact decisions, local operations and rollback |
 | [Architecture](ARCHITECTURE.md) | Request flow, module boundaries, validation and failure semantics |
 | [Usage](USAGE.md) | Notes, voice, Eyes and screen-watch controls |
 | [Current verification](ultra-verification.md) | Actual test results, live trials and known limits |

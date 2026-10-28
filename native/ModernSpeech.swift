@@ -6,6 +6,14 @@ private final class TranscriptAccumulator {
     private let lock = NSLock()
     private var finalized = ""
     private var volatile = ""
+    private let maximumCharacters: Int?
+
+    init(maximumCharacters: Int? = nil) { self.maximumCharacters = maximumCharacters.map { max(1, $0) } }
+
+    private func bounded(_ value: String) -> String {
+        guard let maximumCharacters else { return value }
+        return String(value.suffix(maximumCharacters))
+    }
 
     private func joined(_ prefix: String, _ suffix: String) -> String {
         guard !prefix.isEmpty, !suffix.isEmpty else { return prefix + suffix }
@@ -18,18 +26,18 @@ private final class TranscriptAccumulator {
         lock.lock()
         defer { lock.unlock() }
         if final {
-            finalized = joined(finalized, text)
+            finalized = bounded(joined(finalized, text))
             volatile = ""
         } else {
-            volatile = text
+            volatile = bounded(text)
         }
-        return joined(finalized, volatile)
+        return bounded(joined(finalized, volatile))
     }
 
     func current() -> String {
         lock.lock()
         defer { lock.unlock() }
-        return joined(finalized, volatile)
+        return bounded(joined(finalized, volatile))
     }
 }
 
@@ -51,6 +59,7 @@ final class ModernCapture: @unchecked Sendable {
     private var tapInstalled = false
     private var finished = false
     private var cancelled = false
+    private var cancellationTask: Task<Void, Never>?
     private let onPhrase: (String) -> Void
     private let onLevel: (Double) -> Void
     private let onFinished: (String) -> Void
@@ -65,7 +74,8 @@ final class ModernCapture: @unchecked Sendable {
     static func start(onPhrase: @escaping (String) -> Void,
                       onLevel: @escaping (Double) -> Void,
                       onFinished: @escaping (String) -> Void,
-                      onError: @escaping () -> Void) async throws -> ModernCapture {
+                      onError: @escaping () -> Void,
+                      maximumTranscriptCharacters: Int? = nil) async throws -> ModernCapture {
         try Task.checkCancellation()
         let transcriber = SpeechTranscriber(locale: locale,
                                             transcriptionOptions: [],
@@ -91,7 +101,7 @@ final class ModernCapture: @unchecked Sendable {
             throw NSError(domain: "JarvisSpeech", code: 1)
         }
         let meter = MicrophoneMeter()
-        let transcript = TranscriptAccumulator()
+        let transcript = TranscriptAccumulator(maximumCharacters: maximumTranscriptCharacters)
         let task = Task {
             do {
                 for try await result in transcriber.results {
@@ -130,7 +140,7 @@ final class ModernCapture: @unchecked Sendable {
             try Task.checkCancellation()
             return capture
         } catch {
-            capture.cancel()
+            await capture.cancel().value
             throw error
         }
     }
@@ -166,18 +176,21 @@ final class ModernCapture: @unchecked Sendable {
                 for input in inputs { self.continuation.yield(input) }
             }
             self.continuation.finish()
-            Task {
-                do { try await self.analyzer.finalizeAndFinishThroughEndOfInput() }
-                catch { DispatchQueue.main.async { self.onError() } }
-                await self.resultTask.value
-                let text = self.transcript.current()
-                DispatchQueue.main.async { self.onFinished(text) }
+            DispatchQueue.main.async {
+                guard !self.cancelled else { return }
+                Task {
+                    do { try await self.analyzer.finalizeAndFinishThroughEndOfInput() }
+                    catch { DispatchQueue.main.async { self.onError() } }
+                    await self.resultTask.value
+                    let text = self.transcript.current()
+                    DispatchQueue.main.async { self.onFinished(text) }
+                }
             }
         }
     }
 
-    func cancel() {
-        guard !cancelled else { return }
+    @discardableResult func cancel() -> Task<Void, Never> {
+        if let cancellationTask { return cancellationTask }
         cancelled = true
         if !finished {
             finished = true
@@ -185,7 +198,12 @@ final class ModernCapture: @unchecked Sendable {
             continuation.finish()
         }
         resultTask.cancel()
-        Task { await analyzer.cancelAndFinishNow() }
+        let task = Task {
+            await analyzer.cancelAndFinishNow()
+            await resultTask.value
+        }
+        cancellationTask = task
+        return task
     }
 
     private func stopEngine() {

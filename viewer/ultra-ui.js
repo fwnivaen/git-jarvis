@@ -35,16 +35,9 @@
       if(!parent.isConnected)return;
       if(state.enabled||state.imports_enabled){
         const block=section(parent,'Memory');
-        if(state.enabled)block.append(make('p',state.semantic.semantic_ready?'Semantic and keyword search are ready.':'Keyword search is ready. Semantic search loads when you ask about your notes.'));
+        if(state.enabled)block.append(make('p',state.source==='obsidian'?'Obsidian notes use local keyword search and bounded excerpts.':state.semantic.semantic_ready?'Semantic and keyword search are ready.':'Keyword search is ready. Semantic search loads when you ask about your notes.'));
         if(state.imports_enabled)fileControl(block);
-        if(state.preferences_enabled){
-          const list=make('div'),form=make('form'),key=make('input'),value=make('input'),save=make('button','Remember'),status=make('p');
-          key.placeholder='Preference';value.placeholder='What should Jarvis remember?';key.required=value.required=true;key.maxLength=SETTINGS.preferenceKeyChars;value.maxLength=SETTINGS.preferenceValueChars;
-          key.setAttribute('aria-label','Preference name');value.setAttribute('aria-label','Preference value');status.setAttribute('role','status');
-          const render=values=>{list.replaceChildren();for(const [name,text]of Object.entries(values)){const row=make('p'),forget=make('button','Forget');forget.type='button';row.append(make('span',name+': '+text+' '),forget);list.append(row);forget.onclick=async()=>{try{await request('/memory/preferences',{key:name,forget:true});row.remove();}catch(error){status.textContent=error.message;}};}};
-          render(state.preferences);form.append(key,value,save);block.append(make('h3','Remembered preferences'),list,form,status);
-          form.onsubmit=async event=>{event.preventDefault();save.disabled=true;try{await request('/memory/preferences',{key:key.value,value:value.value});render((await request('/memory')).preferences);key.value=value.value='';status.textContent='Preference remembered.';}catch(error){status.textContent=error.message;}finally{save.disabled=false;}};
-        }
+        if(state.preferences_enabled)window.JarvisLocalServices?.mountPreferences(block);
       }
       if(templates.enabled){const block=section(parent,'Crew workflow'),select=make('select'),automatic=make('option','Automatic');automatic.value='';select.append(automatic);
         for(const item of templates.workflows){const option=make('option',item.label||item.name||item.id);option.value=item.id;select.append(option);}select.value=workflow;select.setAttribute('aria-label','Workflow for your next request');select.onchange=()=>{workflow=select.value;};block.append(select,make('p','Choose how the crew approaches your next request. Automatic keeps quick questions fast.'));

@@ -36,6 +36,18 @@ class NoteFixture:
 
 
 class NoteStoreTests(NoteFixture, unittest.TestCase):
+    def test_crlf_and_mixed_newlines_preserve_exact_revisions_and_saved_bytes(self):
+        original = '# Plan\r\n\r\nA Windows note.\nLast line\r\n'
+        self.path.write_bytes(original.encode('utf-8'))
+        current = note_store.read(self.note, self.vault)
+        self.assertEqual(current['text'], original)
+        self.assertEqual(current['revision'], note_store.revision(original, self.note['_path']))
+        replacement = original + 'Verified edit.\r\n'
+        saved = note_store.save(self.note, self.vault, replacement, current['revision'])
+        self.assertEqual(saved['text'], replacement)
+        self.assertEqual(self.path.read_bytes(), replacement.encode('utf-8'))
+        self.assertEqual(saved['revision'], note_store.revision(replacement, self.note['_path']))
+
     def test_read_and_durable_verified_unicode_roundtrip(self):
         current = note_store.read(self.note, self.vault)
         self.assertEqual(current['text'], self.original)

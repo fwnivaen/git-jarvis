@@ -26,9 +26,12 @@ class NativeGatewayTests(unittest.TestCase):
             (build, 'NOTES_DIR', self.vault), (server, 'NOTES', build.read_notes(self.vault)),
             (native_tool_routes, 'JOURNAL_DIR', self.root / 'journals'),
             (server, 'PREFERENCES', ultra_memory.Preferences(self.root / 'preferences.json')),
+            (server, 'PREFERENCE_ACTIONS', None),
+            (server, 'PREFERENCE_ACTION_PATH', self.root / 'preference-actions' / 'control.sqlite3'),
         ):
             patched = patch.object(target, name, value); patched.start(); self.addCleanup(patched.stop)
         patched = patch.object(build, 'write_graph'); patched.start(); self.addCleanup(patched.stop)
+        self.addCleanup(lambda: server.PREFERENCE_ACTIONS.close() if server.PREFERENCE_ACTIONS else None)
 
     def post(self, path, body):
         status, _, raw = request(path, 'POST', body, ORIGIN)
@@ -62,10 +65,14 @@ class NativeGatewayTests(unittest.TestCase):
         settings = replace(ultra.Settings(), enabled=True, tools_enabled=False)
         body = {'key': 'tone', 'value': 'Concise', 'operation_session': 'c' * 24}
         with patch.object(server, 'ultra_settings', return_value=settings), \
-                patch.object(server.PREFERENCES, 'set', wraps=server.PREFERENCES.set) as saved:
-            self.assertEqual(self.post('/memory/preferences', body)[0], 200)
-            self.assertEqual(self.post('/memory/preferences', body)[0], 200)
-            self.assertEqual(saved.call_count, 1)
+                patch.object(server, 'propose_preference', wraps=server.propose_preference) as proposed:
+            first = self.post('/memory/preferences', body)
+            self.assertEqual(first[0], 200)
+            self.assertEqual(self.post('/memory/preferences', body), first)
+            self.assertEqual(proposed.call_count, 1)
+            self.assertTrue(first[1]['approval_required'])
+            self.assertFalse(first[1]['saved'])
+            self.assertEqual(server.PREFERENCES.read(), {})
             self.assertEqual(self.post('/memory/preferences', dict(body, value='Changed'))[0], 400)
         upload = {'filename': 'synthetic.pdf', 'data': 'c3ludGhldGlj', 'operation_session': 'd' * 24}
         with patch.object(server, 'ultra_settings', return_value=settings), \

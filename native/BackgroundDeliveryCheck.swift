@@ -33,6 +33,17 @@ import Foundation
         queue.paused = true
         check(queue.next(now: now.addingTimeInterval(31)) == nil && queue.pending.isEmpty)
         check(!queue.eligible)
+        var quiet = BackgroundDelivery()
+        quiet.enqueue(id: "quiet", text: "Keep this private until quiet hours end", now: now)
+        quiet.quietHoursActive = true
+        check(quiet.next(now: now) == nil && quiet.pending.count == 1)
+        quiet.quietHoursActive = false
+        check(quiet.next(now: now.addingTimeInterval(1))?.id == "quiet")
+        quiet.preferenceUpdatePending = true
+        quiet.enqueue(id: "pending-save", text: "Waiting for settings acknowledgment", now: now)
+        check(quiet.next(now: now) == nil)
+        quiet.preferenceUpdatePending = false
+        check(quiet.next(now: now)?.id == "pending-save")
         print("Background delivery policy checks: \(checks) passed")
     }
 }

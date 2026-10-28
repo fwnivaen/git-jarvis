@@ -441,8 +441,12 @@ class UltraJarvis:
                                     elif name == "note_write":
                                         prior.clear()
                                         prior.update(note)
-                                    elif note["text"] not in prior["text"]:
-                                        prior["text"] += "\n" + note["text"]
+                                    else:
+                                        if (prior.get('stable_id') and (prior.get('stable_id') != note.get('stable_id')
+                                                or prior.get('revision') != note.get('revision'))):
+                                            prior['_source_conflict'] = True
+                                        if note["text"] not in prior["text"]:
+                                            prior["text"] += "\n" + note["text"]
                                     if prior is not None:
                                         prior["revision"] = note.get("revision")
                                     self._tool_notes[note["id"]] = dict(prior or note)

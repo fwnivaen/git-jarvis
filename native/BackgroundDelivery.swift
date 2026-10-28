@@ -15,9 +15,11 @@ struct BackgroundDelivery {
     var paused = false
     var sessionActive = true
     var displayAwake = true
+    var quietHoursActive = false
+    var preferenceUpdatePending = false
     private(set) var pending: [Update] = []
     private var remembered: [String] = []
-    var eligible: Bool { !paused && sessionActive && displayAwake }
+    var eligible: Bool { !paused && sessionActive && displayAwake && !quietHoursActive && !preferenceUpdatePending }
 
     mutating func enqueue(id: String, text: String, now: Date = Date()) {
         discardExpired(now: now)

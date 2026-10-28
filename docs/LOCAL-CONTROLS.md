@@ -9,7 +9,7 @@ This describes the isolated candidate, which is not the running installation. Se
 - **Option–Command–M** mutes speech; answers remain visible.
 - The **✦** menu controls the Island, local speech model, read-only permissions, optional background speech and paused background updates.
 
-The helper uses one microphone tap while explicitly listening. No continuous listener is enabled. Background notices stay in memory, expire after thirty seconds and wait behind active speech. Session-inactive and display-sleep notifications defer delivery; manual pause covers other unwanted updates. Calls, Do Not Disturb and screen sharing are not detected. Foreground tracking and Focus remain removed.
+The helper uses one microphone tap while explicitly listening. Hands-free is off each launch. The explicit “Try hands-free (preview)” menu choice asks before continuous on-device transcription, exact “Hey Jarvis” activation and a bounded follow-up. Turn the preview off before locking; immediate lock detection has not been verified. Background notices stay in memory, expire after thirty seconds and wait behind active speech. New York quiet hours plus session-inactive, display-sleep and system-sleep notifications defer delivery; manual pause covers other unwanted updates. Calls, Do Not Disturb and screen sharing are not detected. Foreground tracking and Focus remain removed.
 
 ## Work and previews
 
@@ -28,7 +28,7 @@ The canonical `/stage2/tasks` view projects existing Work records. Work tools re
 
 The Island shows a generic notice for actual pending proposals. **Review ↗** opens `/#approvals`, selecting Mission Control. Resolved/expired proposals clear on the next successful poll. Failed polls do not invent a resolution.
 
-Interrupted/unverified effects become uncertain and are never replayed automatically. Inspect the note before a fresh edit. These controls cover existing note edits only; preference/import compensation and general external-action approvals remain unsupported. No new model tool gains approval authority.
+Interrupted/unverified effects become uncertain and are never replayed automatically. Inspect the note before a fresh edit. These note controls cover existing note edits. A separate preference queue now supports explicit set/forget proposals and exact-state undo; imports and general external actions still have no compensation/approval engine. Model tools can propose a preference change but cannot approve it.
 
 ### Storage and privacy
 
@@ -42,7 +42,17 @@ Decision POSTs require the local viewer origin, strict fields and an exact finge
 
 Settings/Voice offer **Refresh checks** and **View setup checks**; `/health` returns the same on-demand overview. It inspects artifacts, private file modes, supplied feature gates and tool metadata. The HTTP wrapper reads normal backend/settings locally and returns no credentials or private paths.
 
-It does not open the microphone, prompt, download models, read note contents, open databases, make model/network calls or schedule work. A bundle is not proof of a running helper, and a database header is not an integrity check. Guided acceptance, unified native/web settings, complete export, daily scheduling and battery/network policy remain separate work.
+It does not open the microphone, prompt, download models, read note contents, open databases, make model/network calls or schedule work. A bundle is not proof of a running helper, and a database header is not an integrity check. Separate Settings sections now provide opt-in daily checks/resource policy and selected-data export; they are not effects of opening readiness. Native background speech uses a revision-checked shared setting, while other native/web settings remain separate. Complete guided acceptance and full backup/restore are not claimed.
+
+## Preferences, Brain and local operations
+
+Settings → Saved preferences queues exact set/forget choices. Work → Preference decisions displays before/after maps and requires exact approval; one-hour undo refuses any intervening map change. Retries reuse the same proposal identity until an explicit new review, preventing duplicate pending changes. Queues and tool/workflow state are namespaced with the selected vault at startup. GET status does not create a new queue.
+
+The [Obsidian Brain guide](OBSIDIAN-BRAIN.md) explains the separate shared Markdown folder, local search, bounded source/history context, private-note exclusions and future-only connection changes. Existing notes and private configuration are preserved.
+
+Settings → Background and daily checks is opt-in. It uses New York time, one completed check per local day, bounded retries, resource gates and a cross-process lock. It calls no model and runs only while this server runs. Battery/network probes require a separate explicit setting; a configured network is not verified internet. Quiet hours defer background notices. Native background speech patches only that setting using its exact current revision; stale updates are refused. Unknown call/DND/sharing state is not inferred.
+
+History projects bounded task/approval metadata, not transcripts or note bodies. Settings → Export your data downloads only checked sections as an in-memory ZIP. Private notes/configuration/credentials/checkpoints/journals are excluded; this is not a complete backup or automatic erasure mechanism.
 
 ## Verification and rollback
 

@@ -7,13 +7,13 @@
   const STEPS=['retrieve','assign','workers','review','complete'];
   const LABELS={retrieve:'Retrieve sources',assign:'Assign work',workers:'Analyze',review:'Verify & answer',complete:'Complete'};
   const make=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
-  let root=null,timer=null,stream=null,selected=null,generation=0,last=null;
+  let root=null,timer=null,stream=null,selected=null,generation=0,last=null,chooseCurrent=null;
   async function request(path,body){
     const response=await fetch(path,{cache:'no-store',signal:AbortSignal.timeout(SETTINGS.requestMs),
       ...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
     const data=await response.json();if(!response.ok)throw Error(data.answer||'Workflow service unavailable.');return data;
   }
-  function dispose(){generation++;clearTimeout(timer);stream?.close();stream=null;root=null;selected=null;last=null;}
+  function dispose(){generation++;clearTimeout(timer);stream?.close();stream=null;root=null;selected=null;last=null;chooseCurrent=null;}
   function mount(parent){
     dispose();const current=generation;let historySignature='';
     root=make('section','workflow-console');parent.append(root);
@@ -197,7 +197,7 @@
       try{const fingerprint=JSON.stringify([question.value,select.value]);if(!submission||submission.fingerprint!==fingerprint){const bytes=new Uint8Array(SETTINGS.requestBytes);crypto.getRandomValues(bytes);submission={fingerprint,key:Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('')};}const run=await request('/workflows/start',{question:question.value,workflow:select.value,request_key:submission.key});if(current!==generation)return;selected=run.id;render(run);connect(run.id);}
       catch(error){message(error.message);}finally{if(current===generation)refresh();}
     };
-    refresh();
+    chooseCurrent=choose;refresh();
   }
-  window.JarvisWorkflows={mount,dispose};window.addEventListener('pagehide',dispose);
+  window.JarvisWorkflows={mount,dispose,openRun(id){if(/^[a-f0-9]{24}$/.test(id)&&chooseCurrent)return chooseCurrent(id);return false;}};window.addEventListener('pagehide',dispose);
 })();
