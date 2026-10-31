@@ -47,6 +47,7 @@ enum LaunchMode {
     case normal, ask(String), demo
 }
 
+@MainActor
 final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
     private let diagnostics = Logger(subsystem: "local.fwnivaen.jarvis.desktop", category: "voice")
     private let mode: LaunchMode
@@ -264,7 +265,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
             } else { beginManualCapture(fromHotkey: false) }
         case .preparing, .capturing:
             conversation.releaseToTalk()
-        case .finishing, .thinking, .speaking, .mutedReply:
+        case .finishing, .thinking, .renderingSpeech, .speaking, .mutedReply:
             cancelCurrentTurn()
         }
     }
@@ -385,13 +386,15 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         ]
         workspaceObservers = signals.map { name, sessionActive, displayAwake in
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                if sessionActive == false || displayAwake == false {
-                    self?.voiceStartGeneration += 1
-                    self?.manualCapturePending = false
-                    self?.handsFree?.disable(reason: "Hands-free off while the session is unavailable")
-                    self?.conversation.cancel()
+                MainActor.assumeIsolated {
+                    if sessionActive == false || displayAwake == false {
+                        self?.voiceStartGeneration += 1
+                        self?.manualCapturePending = false
+                        self?.handsFree?.disable(reason: "Hands-free off while the session is unavailable")
+                        self?.conversation.cancel()
+                    }
+                    self?.conversation.setBackgroundAvailability(sessionActive: sessionActive, displayAwake: displayAwake)
                 }
-                self?.conversation.setBackgroundAvailability(sessionActive: sessionActive, displayAwake: displayAwake)
             }
         }
     }

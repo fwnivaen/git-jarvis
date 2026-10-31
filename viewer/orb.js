@@ -467,8 +467,8 @@ void main() {
   function refreshDetail() {
     const muted = new URLSearchParams(location.search).getAll('mute').includes('1');
     let message=explicit?.message||voice.notice||'';
-    if(!message)message=currentState==='SPEAKING'?(voice.externalSpeaking?'Native focus voice · output spectrum unavailable':outputUnavailable?'Daniel · output spectrum unavailable':'Daniel · local audio'):
-      currentState==='THINKING'?(outputLoading?'Preparing local Daniel audio':'Working on your request'):currentState==='LISTENING'?(voice.wakeListening?'Awaiting “Jarvis” · microphone enabled':'Listening · say stop to interrupt'):
+    if(!message)message=currentState==='SPEAKING'?(voice.externalSpeaking?'Native JARVIS voice · output spectrum unavailable':outputUnavailable?'M1 voice preview · spectrum unavailable':'M1 voice preview · local audio'):
+      currentState==='THINKING'?(outputLoading?'Preparing M1 voice preview':'Working on your request'):currentState==='LISTENING'?(voice.wakeListening?'Awaiting “Jarvis” · microphone enabled':'Listening · say stop to interrupt'):
       currentState==='OFFLINE'?'Local server disconnected · reconnect to resume':currentState==='CONFIRM'||currentState==='AWAITING APPROVAL'?'Waiting for your confirmation':currentState==='ERROR'?'Reconnect or choose an input':muted?'Silent session · hold Space to talk':'Hold Space to talk';
     detail.textContent=message;
     const micLive=voice.enabled&&(browserMic||(native&&Date.now()-native.received<CONFIG.staleMs));
@@ -496,37 +496,30 @@ void main() {
   async function release(token) {
     if(token)try{await fetch('/voice/release',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token}),keepalive:true});}catch{}
   }
+  const localSpeech = window.createLocalSpeechPlayer();
+  let speechEpoch = 0;
   function stopSpeech() {
-    renderController?.abort();renderController=null;outputLoading=false;
-    const active=playback;playback=null;
-    if(active){active.source.onended=null;try{active.source.stop();}catch{}active.source.disconnect();active.meter.node.disconnect();}
+    speechEpoch++;
+    localSpeech.cancel();
+    outputLoading=false;
+    if(playback?.meter)playback.meter.node.disconnect();
+    playback=null;
+    sync();
   }
   async function playSpeech(text,options={}) {
     stopSpeech();
-    const controller=new AbortController();renderController=controller;
+    const epoch=speechEpoch;
+    const current=()=>epoch===speechEpoch && options.isCurrent?.()!==false;
+    let meter=null;
+    const finish=()=>{if(!current())return;if(meter)meter.node.disconnect();playback=null;outputLoading=false;sync();options.onEnd?.();};
     outputLoading=true;sync();
-    const timeout=setTimeout(()=>controller.abort(),CONFIG.renderTimeoutMs);
-    let token=null;
-    try {
-      const context=await activeContext();
-      const response=await fetch('/voice/render',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text}),signal:controller.signal});
-      const data=await response.json();
-      if(!response.ok||data.status!=='ready'||typeof data.token!=='string'||typeof data.url!=='string')throw new Error('Local audio unavailable');
-      token=data.token;
-      if(controller.signal.aborted||options.isCurrent?.()===false)return true;
-      if(!data.url.startsWith('/voice/audio?token='))throw new Error('Invalid local audio response');
-      const wave=await fetch(data.url,{signal:controller.signal});if(!wave.ok)throw new Error('Local audio expired');
-      const bytes=await wave.arrayBuffer();await release(token);token=null;
-      const buffer=await context.decodeAudioData(bytes);
-      if(controller.signal.aborted||options.isCurrent?.()===false)return true;
-      const meter=analyser(context),source=context.createBufferSource();source.buffer=buffer;
-      source.connect(meter.node);meter.node.connect(context.destination);playback={source,meter};outputUnavailable=false;
-      source.onended=()=>{if(playback?.source!==source)return;source.disconnect();meter.node.disconnect();playback=null;options.onEnd?.();sync();};
-      outputLoading=false;source.start();sync();return true;
-    }catch {
-      if(controller.signal.aborted||options.isCurrent?.()===false)return true;
-      outputUnavailable=true;outputLoading=false;sync();return false;
-    }finally{clearTimeout(timeout);if(renderController===controller){renderController=null;outputLoading=false;sync();}await release(token);}
+    localSpeech.start(text,{
+      outputNode:context=>{if(!meter){meter=analyser(context);meter.node.connect(context.destination);}playback={meter};return meter.node;},
+      onstart:()=>{if(current()){outputLoading=false;outputUnavailable=false;sync();options.onStart?.();}},
+      onend:finish,
+      onerror:message=>{if(!current())return;outputUnavailable=true;if(meter)meter.node.disconnect();playback=null;outputLoading=false;sync();options.onError?.(message);}
+    });
+    return true;
   }
   function setStatus(state,options={}) {
     if(!state){explicit=null;sync();return;}
@@ -605,7 +598,7 @@ void main() {
   const themeObserver=new MutationObserver(()=>{dirty=true;});themeObserver.observe(document.documentElement,{attributes:true,attributeFilter:['data-theme','data-motion','class']});
   const motionChanged=()=>{dirty=true;};motionQuery.addEventListener('change',motionChanged);
   if(brainChip){new MutationObserver(()=>setModel(brainChip.textContent.replace(/\s*▾\s*$/,''))).observe(brainChip,{childList:true,subtree:true});setModel(brainChip.textContent.replace(/\s*▾\s*$/,''));}
-  window.JarvisOrb={wake,updateVoice,nativeAudio,setStatus,setModel,playSpeech,stopSpeech,microphoneDevice:()=>window.JarvisVoice?.inputDevice?.()??$('.orb-device').value,
+  window.JarvisOrb={wake,updateVoice,nativeAudio,setStatus,setModel,playSpeech,stopSpeech,unlockSpeech:()=>localSpeech.unlock(),warmSpeech:()=>localSpeech.warm(),microphoneDevice:()=>window.JarvisVoice?.inputDevice?.()??$('.orb-device').value,
     setConnected(value){const next=Boolean(value);if(next&&!connected)wake();connected=next;sync();},
     snapshot:()=>({state:currentState,visualMode:preview||visualMode(),preview:!!preview,renderer:particleView?'webgl':'fallback',micEnabled:voice.enabled,audioSource:playback?'local-daniel-output':voice.enabled&&voice.backend==='native'&&native?'native-microphone':browserMic?'browser-microphone':null,spectrum:!!playback||!!browserMic||!!(voice.enabled&&native&&Date.now()-native.received<CONFIG.staleMs)}),
     destroy(){stopped=true;cancelAnimationFrame(animationFrame);clearTimeout(previewTimer);resizeObserver.disconnect();themeObserver.disconnect();motionQuery.removeEventListener('change',motionChanged);stopSpeech();stopMicMeter();audioContext?.close();particleView?.resources.forEach(resource=>resource.dispose());particleView?.renderer.dispose();}};

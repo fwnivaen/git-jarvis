@@ -19,11 +19,11 @@ function setup(search = '', supported = true) {
     abort() { this.onend?.(); }
     result(parts) { this.onresult({resultIndex: 0, results: parts.map(([text, final]) => Object.assign([{transcript: text}], {isFinal: final}))}); }
   }
-  const synth = {getVoices: () => [{name: 'Samantha', lang: 'en-US'}, {name: 'Serena', lang: 'en-GB'}, {name: 'Daniel (English (UK))', lang: 'en-GB', voiceURI: 'com.apple.voice.enhanced.en-GB.Daniel'}], cancel() {cancels++;}, speak(u) {speech.push(u);}};
+  const synth = {getVoices: () => [{name: 'Samantha', lang: 'en-US'}, {name: 'Serena', lang: 'en-GB'}, {name: 'Daniel (English (UK))', lang: 'en-GB', voiceURI: 'com.apple.voice.enhanced.en-GB.Daniel'}], cancel() {cancels++;}, speak() {throw Error('System synthesis must never be used');}};
   const context = {URLSearchParams, location: {search}, SpeechSynthesisUtterance: function(text) {this.text = text;},
     document: {getElementById: el, addEventListener(_, fn) {click = fn;}},
     setTimeout(fn, ms) {timers.set(++next, {fn, at: now + ms}); return next;},
-    clearTimeout(id) {timers.delete(id);}, window: {speechSynthesis: synth, webkitSpeechRecognition: supported ? Recognition : undefined}};
+    clearTimeout(id) {timers.delete(id);}, window: {JarvisOrb:{nativeAudio(){},updateVoice(){},unlockSpeech(){},warmSpeech(){},stopSpeech(){cancels++;},playSpeech(text,options){speech.push({text,onend:options.onEnd});options.onStart?.();return true;}},speechSynthesis: synth, webkitSpeechRecognition: supported ? Recognition : undefined}};
   vm.runInNewContext(source, context);
   const voice = context.window.JarvisVoice;
   voice.setSubmit(q => {sent.push(q); voice.setThinking(true);});
@@ -32,7 +32,7 @@ function setup(search = '', supported = true) {
 }
 const a = setup();
 assert.equal(a.speech.length, 0);
-a.click(); assert.equal(a.speech.length, 1); assert.equal(a.speech[0].voice.lang, 'en-GB'); assert.equal(a.speech[0].voice.name, 'Daniel (English (UK))');
+a.click(); assert.equal(a.speech.length, 1); assert.equal(a.speech[0].text, 'Ready when you are.');
 a.click(); assert.equal(a.speech.length, 1);
 a.speech[0].onend(); a.mic();
 assert.equal(a.el('voice-status').textContent, 'Listening…');
@@ -82,26 +82,17 @@ muted.current().result([['Still works', true]]); muted.tick(FINISH); assert.deep
 const missingVoice = setup();
 missingVoice.context.window.speechSynthesis.getVoices = () => [{name: 'Samantha', lang: 'en-US'}];
 missingVoice.click();
-assert.equal(missingVoice.speech.length, 0);
-assert.match(missingVoice.el('voice-status').textContent, /Daniel British voice unavailable/);
+assert.equal(missingVoice.speech.length, 1, 'Local voice does not depend on a system voice');
 const denied = setup(); denied.mic(); denied.current().onerror({error: 'not-allowed'});
 assert.match(denied.el('voice-status').textContent, /permission denied/);
 const unsupported = setup('', false); assert.equal(unsupported.el('mic').disabled, false);
-console.log('VOICE PASS: activation, British voice, 900ms buffering, interim speech, session restart, 8s thinking, busy mic, immediate interrupts, mute, permission and unsupported states.');
+console.log('VOICE PASS: activation, reference-conditioned local voice, 900ms buffering, interim speech, session restart, 8s thinking, busy mic, immediate interrupts, mute, permission and unsupported states.');
 
 (async () => {
   const loadingVoice = setup();
-  const loadingSynth = loadingVoice.context.window.speechSynthesis;
-  const installedVoices = loadingSynth.getVoices();
-  let voicesReady;
-  loadingSynth.getVoices = () => [];
-  loadingSynth.addEventListener = (_, handler) => { voicesReady = handler; };
-  loadingSynth.removeEventListener = () => {};
+  delete loadingVoice.context.window.speechSynthesis;
   loadingVoice.click();
-  assert.equal(loadingVoice.speech.length, 0);
-  loadingSynth.getVoices = () => installedVoices;
-  voicesReady(); await Promise.resolve();
-  assert.equal(loadingVoice.speech[0].voice.name, 'Daniel (English (UK))');
+  assert.equal(loadingVoice.speech.length, 1, 'Local audio works without speechSynthesis');
 
   const native = setup('?mute=1');
   const calls=[];

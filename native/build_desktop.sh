@@ -25,7 +25,7 @@ swiftc -target arm64-apple-macosx27.0 -parse-as-library \
   native/IslandCore.swift native/IslandMotion.swift native/MiniOrb.swift \
   native/IslandText.swift native/IslandLayers.swift native/IslandViews.swift native/Island.swift native/OrbMetal.swift \
   native/IslandDemo.swift native/LiveTextEvidence.swift native/Sounds.swift native/Hotkeys.swift \
-  native/Conversation.swift native/ModernSpeech.swift native/HandsFreePolicy.swift native/HandsFree.swift native/SpeechModelInstaller.swift \
+  native/Conversation.swift native/LocalSpeechClient.swift native/LocalVoiceSpeaker.swift native/ModernSpeech.swift native/HandsFreePolicy.swift native/HandsFree.swift native/SpeechModelInstaller.swift \
   native/TranscriberSmoke.swift \
   native/VoiceLock.swift native/MicrophoneCheck.swift \
   native/TaskWatcher.swift native/BackgroundDelivery.swift native/DeliveryPreferences.swift native/JarvisDesktop.swift \

@@ -2,6 +2,9 @@
 
 A personal AI assistant that connects a Markdown knowledge vault, a 3D galaxy, voice and a bounded team of collaborating agents.
 
+The 8 GB M1 uses a local voice preview conditioned on the approved briefing.
+See [voice setup, limitations and rollback](docs/m1-voice.md).
+
 [![Checks](https://github.com/fwnivaen/Jarvis/actions/workflows/ci.yml/badge.svg)](https://github.com/fwnivaen/Jarvis/actions/workflows/ci.yml)
 
 ![Jarvis galaxy with three real working agent signals and their shared constellation](docs/screenshots/agents-live.jpg)

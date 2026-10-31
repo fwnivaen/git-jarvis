@@ -75,6 +75,7 @@ from pathlib import Path
 
 import build
 import voice_bridge
+from local_speech import LocalSpeech
 import sensor_state
 
 import watch
@@ -104,6 +105,7 @@ import usage_policy
 WATCH = watch.Watch()
 SENSORS = sensor_state.Sensors()
 ROOT = Path(__file__).resolve().parent
+SPEECH = LocalSpeech(ROOT)
 BRAIN = obsidian_brain.BrainService(ROOT / '.local' / 'obsidian')
 VIEWER_DIR = ROOT / "viewer"
 CONFIG_PATH = ROOT / "config.json"
@@ -167,6 +169,7 @@ UI_ASSETS = {
     "galaxy.js": "text/javascript", "layout-worker.js": "text/javascript",
     "galaxy-benchmark.html": "text/html; charset=utf-8", "galaxy-benchmark.js": "text/javascript",
     "orb.js": "text/javascript", "orb.css": "text/css",
+    "local-speech.js": "text/javascript", "voice-silence.wav": "audio/wav",
     "Geist.woff2": "font/woff2", "GeistMono.woff2": "font/woff2",
     "three.module.js": "text/javascript", "three.core.js": "text/javascript",
     "3d-force-graph.min.js": "text/javascript",
@@ -1388,6 +1391,26 @@ class Handler(BaseHTTPRequestHandler):
                     "screen": True, "models": True, "computer_control": False,
                     "agents": settings.enabled and settings.routing_enabled, "trading": False, "automations": False}}).encode(), "application/json", head=head)
             return
+        if path == "/speech/status":
+            self.send_bytes(json.dumps(SPEECH.status()).encode(), "application/json", head=head)
+            return
+        if path.startswith('/speech/'):
+            match = re.fullmatch(r'/speech/jobs/([a-f0-9]{32})', path)
+            if match:
+                value = SPEECH.get(match[1])
+                self.send_bytes(json.dumps(value or {'error': True}).encode(), 'application/json', 200 if value else 404, head=head)
+                return
+            match = re.fullmatch(r'/speech/audio/([a-f0-9]{32})(?:/(\d{1,4})\.wav|\.wav)', path)
+            audio = None
+            if match:
+                audio = SPEECH.part(match[1], int(match[2])) if match[2] else SPEECH.audio(match[1])
+            try:
+                content = audio.read_bytes() if audio else None
+            except OSError:
+                content = None
+            self.send_bytes(content or b'Audio unavailable', 'audio/wav' if content else 'text/plain',
+                            200 if content else 404, head=head)
+            return
         if path == "/voice/devices":
             self.send_bytes(json.dumps(voice_bridge.audio_devices()).encode(), "application/json", head=head)
             return
@@ -1473,7 +1496,7 @@ class Handler(BaseHTTPRequestHandler):
             WORKFLOWS.stream_slots.release()
 
     def do_POST(self):
-        if self.path not in ("/preference-actions/propose", "/preference-actions/decide", "/preference-actions/undo", "/brain/setup", "/brain/settings", "/brain/search", "/brain/refresh", "/brain/disconnect", "/operations/settings", "/operations/run", "/export/data", "/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/workflows/erase-plan", "/workflows/erase", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
+        if self.path not in ("/speech", "/speech/cancel", "/speech/warm", "/preference-actions/propose", "/preference-actions/decide", "/preference-actions/undo", "/brain/setup", "/brain/settings", "/brain/search", "/brain/refresh", "/brain/disconnect", "/operations/settings", "/operations/run", "/export/data", "/approvals/propose", "/approvals/decide", "/approvals/undo", "/export/word", "/stage2/tasks/plan", "/workflows/start", "/workflows/cancel", "/workflows/retry", "/workflows/erase-plan", "/workflows/erase", "/tools/call", "/memory/import", "/memory/preferences", "/note", "/eyes", "/relief", "/watch", "/look", "/chat", "/remember", "/see", "/model", "/preflight/cleanup", "/voice/start", "/voice/poll", "/voice/stop", "/voice/render", "/voice/release"):
             self.send_json({"answer": "Not found.", "nodes": []}, 404)
             return
         if not self.local_request():
@@ -1484,7 +1507,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= (document_export.MAX_REQUEST_BYTES if self.path == "/export/word" else MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path in ("/note", "/approvals/propose") else MAX_VOICE_REQUEST_BYTES if self.path == "/voice/render" else MAX_REQUEST_BYTES):
+            if not 0 < length <= (document_export.MAX_REQUEST_BYTES if self.path == "/export/word" else MAX_IMPORT_REQUEST_BYTES if self.path == "/memory/import" else MAX_SEE_REQUEST_BYTES if self.path in ("/see", "/look") else note_store.MAX_NOTE_REQUEST_BYTES if self.path in ("/note", "/approvals/propose") else MAX_VOICE_REQUEST_BYTES if self.path in ("/voice/render", "/speech") else MAX_REQUEST_BYTES):
                 raise ValueError
             body = json.loads(self.rfile.read(length))
             if self.path in ('/workflows/erase-plan', '/workflows/erase'):
@@ -1730,6 +1753,19 @@ class Handler(BaseHTTPRequestHandler):
                     SENSORS.update(body)
                 self.send_json(SENSORS.state())
                 return
+            if self.path in ('/speech', '/speech/cancel', '/speech/warm'):
+                try:
+                    if self.path == '/speech':
+                        value = SPEECH.submit(body.get('text'), body.get('request_id'), body.get('delivery'),
+                                              cached_only=body.get('cached_only') is True)
+                    elif self.path == '/speech/cancel':
+                        value = SPEECH.cancel(body.get('request_id'))
+                    else:
+                        value = SPEECH.warm()
+                    self.send_json(value)
+                except (ValueError, OSError):
+                    self.send_json({'state': 'failed', 'message': 'Voice unavailable. The reply is still on screen.'}, 400)
+                return
             if self.path.startswith("/voice/"):
                 # Voice control must originate in our own viewer, never a cross-site POST.
                 if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
@@ -1914,6 +1950,7 @@ def main():
         print("\nJarvis stopped.")
     finally:
         OPERATIONS.stop()
+        SPEECH.close()
         WORKFLOWS.close()
         if NOTE_ACTIONS is not None:
             NOTE_ACTIONS.close()

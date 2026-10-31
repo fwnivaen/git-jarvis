@@ -64,8 +64,6 @@ function bootGreeting(now = new Date()) {
 document.getElementById('answer').textContent = bootGreeting();
 </script>
 <script id="voice-controller">
-const SPEECH_VOICE_NAME = /^Daniel(?:\b|$)/i;
-const SPEECH_VOICE_LOAD_MS = 1500;
 const FINISH_MS = 900;
 const NATIVE_POLL_MS = 150;
 const ECHO_TAIL_MS = 1200;
@@ -115,6 +113,7 @@ class MacRecognition {
   const el = id => document.getElementById(id);
   const synth = window.speechSynthesis;
   let Recognition = window.SpeechRecognition || window.webkitSpeechRecognition || MacRecognition;
+  let playbackStarted = false;
   let activated = false, thinking = false, speaking = false, externalSpeaking = false, enabled = false;
   let recognition = null, timer = null, buffer = [], pending = false, generation = 0;
   let notice = '', submit = null, answerHandler = null, outputText = '', quietUntil = 0, echoUntil = 0, latestInput = '', inputDevice = '';
@@ -122,7 +121,7 @@ class MacRecognition {
   const normalizeSpeech = text => text.toLowerCase().replace(/[^a-z0-9 ]/g,'').trim();
   function bargeIn() { if(speaking)echoUntil=Date.now()+ECHO_TAIL_MS; generation++; speaking=false; externalSpeaking=false; synth?.cancel(); window.JarvisOrb?.stopSpeech?.(); status(); }
   function status() {
-    el('voice-status').textContent = thinking ? 'Thinking…' : (speaking || externalSpeaking) ? 'Speaking…' :
+    el('voice-status').textContent = thinking ? 'Thinking…' : (speaking || externalSpeaking) ? (externalSpeaking || playbackStarted ? 'Speaking…' : 'Preparing voice…') :
       enabled ? notice || (wakeRequired&&!wakeOpen&&!answerHandler&&!holdActive?'Awaiting “Jarvis”…':'Listening…') : notice || 'Ready';
     el('mic').disabled = !Recognition;
     el('mic').setAttribute('aria-pressed', String(enabled));
@@ -156,51 +155,22 @@ class MacRecognition {
   // All synthesis, including the greeting, passes through this single gate.
   async function speak(text) {
     if (new URLSearchParams(location.search).getAll('mute').includes('1') ||
-        !activated || !synth || !text || pending || buffer.length || Date.now()<quietUntil) return;
+        !activated || !text || pending || buffer.length || Date.now()<quietUntil) return;
     stopSpeech();
     const token = generation;
     outputText=normalizeSpeech(text);
-    speaking = true; status();
-    let voices = synth.getVoices();
-    if (!voices.length) {
-      await new Promise(resolve => {
-        const ready = () => {
-          clearTimeout(timeout);
-          synth.removeEventListener?.('voiceschanged', ready);
-          resolve();
-        };
-        const timeout = setTimeout(ready, SPEECH_VOICE_LOAD_MS);
-        synth.addEventListener?.('voiceschanged', ready, {once: true});
-      });
-      if (token !== generation) return;
-      voices = synth.getVoices();
-    }
-    const candidates = voices.filter(v => /^en[-_]GB$/i.test(v.lang) && SPEECH_VOICE_NAME.test(v.name));
-    const selected = candidates.find(v => /premium/i.test(v.voiceURI + ' ' + v.name)) ||
-      candidates.find(v => /enhanced/i.test(v.voiceURI + ' ' + v.name)) || candidates[0];
-    if (!selected) {
-      speaking = false;
-      notice = 'Daniel British voice unavailable · answer shown above';
-      listen(); status(); return;
-    }
-    notice = '';
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = selected;
-    utterance.lang = 'en-GB';
+    speaking = true; playbackStarted=false; notice=''; status();
     const finish = () => { if (token === generation) {
       speaking = false;
-      // Discard the native recognizer's cumulative transcript of our own voice.
       if (Recognition === MacRecognition && enabled && !thinking) { haltRecognition(); clearBuffer(); listen(); }
       listen(); status();
     } };
-    if (window.JarvisOrb?.playSpeech && await window.JarvisOrb.playSpeech(text,{isCurrent:()=>token===generation,onEnd:finish})) return;
-    if (token !== generation) return;
-    utterance.onend = finish;
-    utterance.onerror = () => {
-      if (token === generation) { notice = 'Voice unavailable · answer shown above'; finish(); }
-    };
-    synth.speak(utterance);
+    if (window.JarvisOrb?.playSpeech) {
+      await window.JarvisOrb.playSpeech(text,{isCurrent:()=>token===generation,onEnd:finish,onStart:()=>{if(token===generation){playbackStarted=true;status();}},
+        onError:message=>{if(token===generation){notice=message;finish();}}});
+    } else { notice='Voice unavailable · the reply is shown above'; finish(); }
   }
+
   function haltRecognition() {
     const old = recognition; recognition = null;
     if (old) old.abort();
@@ -294,7 +264,7 @@ class MacRecognition {
   }
   document.addEventListener('click', event => {
     if (!event.isTrusted || activated) return;
-    activated = true;
+    activated = true; window.JarvisOrb?.unlockSpeech?.();
     speak(el('answer').textContent);
   }, {capture: true});
   el('mic').onclick = () => {
@@ -306,7 +276,7 @@ class MacRecognition {
   el('stop-speech').onclick = stopSpeech;
   window.JarvisVoice = {
     speak,
-    activate() { activated=true; status(); },
+    activate() { activated=true; window.JarvisOrb?.unlockSpeech?.(); status(); },
     setWakeWord(value) { const next=value===true;if(next===wakeRequired)return;wakeRequired=next;resetWake();clearBuffer();latestInput='';if(enabled){haltRecognition();listen();}status(); },
     wakeWordEnabled: () => wakeRequired,
     beginHold() { holdActive=true;resetWake();status(); },
@@ -345,7 +315,7 @@ class MacRecognition {
     },
     setThinking(value) {
       thinking = value;
-      if (value) { stopSpeech(); haltRecognition(); }
+      if (value) { stopSpeech(); haltRecognition(); if(activated && !new URLSearchParams(location.search).getAll('mute').includes('1'))window.JarvisOrb?.warmSpeech?.(); }
       if(!value && !pending && !buffer.length)haltRecognition();
       listen(); if(!value)schedule();
       status();
@@ -359,6 +329,7 @@ class MacRecognition {
   status();
 })();
 </script>
+<script src="/local-speech.js"></script>
 <script src="/orb.js"></script>
 <script src="/3d-force-graph.min.js"></script>
 

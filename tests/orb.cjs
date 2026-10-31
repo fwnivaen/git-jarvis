@@ -21,7 +21,7 @@ function setup(){
     sessionStorage:{getItem:()=>true},getComputedStyle:()=>({getPropertyValue:()=> '#5eead4'}),
     navigator:{mediaDevices:{getUserMedia(){microphones++;throw Error('unexpected microphone');}}},
     document:{hidden:false,documentElement:{dataset:{}},querySelector:()=>null,getElementById:name=>name==='jarvis-orb-host'?host:name==='mic'?element('mic'):null},
-    window:{addEventListener(){}},ResizeObserver:class{observe(){}disconnect(){disconnected++;}},
+    window:{addEventListener(){},createLocalSpeechPlayer:()=>({cancel(){},unlock(){},warm(){}})},ResizeObserver:class{observe(){}disconnect(){disconnected++;}},
     MutationObserver:class{observe(){}disconnect(){disconnected++;}},
     requestAnimationFrame(fn){frames.set(++next,fn);return next;},cancelAnimationFrame(id){frames.delete(id);canceled++;},
     setTimeout(fn,ms){timers.set(++next,{fn,ms});return next;},clearTimeout(id){timers.delete(id);}};

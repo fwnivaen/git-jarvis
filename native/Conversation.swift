@@ -36,23 +36,24 @@ final class MicrophoneMeter {
     }
 }
 
-final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
+@MainActor
+final class Conversation: NSObject {
     static let serverURL = URL(string: "http://127.0.0.1:4700/chat")!
-    static let postRollSeconds = 0.25
-    static let finalPhraseWaitSeconds = 1.5
+    nonisolated static let postRollSeconds = 0.25
+    nonisolated static let finalPhraseWaitSeconds = 1.5
     static let requestBudgetSeconds = 110.0
-    static let meterSamples = 1024
+    nonisolated static let meterSamples = 1024
     static let mutedWordsPerMinute = 180.0
-    static let initialSilenceFloorDB = -90.0
+    nonisolated static let initialSilenceFloorDB = -90.0
 
-    enum Phase { case idle, preparing, capturing, finishing, thinking, speaking, mutedReply }
+    enum Phase { case idle, preparing, capturing, finishing, thinking, renderingSpeech, speaking, mutedReply }
     private(set) var phase = Phase.idle { didSet { onPhase?(phase) } }
     private(set) var muted = false
     private(set) var backgroundSpeechEnabled = UserDefaults.standard.bool(forKey: "speakBackgroundUpdates")
     var onPhase: ((Phase) -> Void)?
     private let island: IslandController
-    private let synthesizer = AVSpeechSynthesizer()
-    private var activeUtterance: AVSpeechUtterance?
+    private let speaker = Speaker(base: URL(string: "http://127.0.0.1:4700")!)
+    private var speechTask: Task<Void, Never>?
     private var recognizer: SFSpeechRecognizer?
     private var engine: AVAudioEngine?
     private var speechRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -79,12 +80,25 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     init(island: IslandController) {
         self.island = island
         super.init()
-        synthesizer.delegate = self
+        speaker.onPlayback = { [weak self] playing in
+            guard let self, playing, self.phase == .renderingSpeech else { return }
+            self.phase = .speaking
+            self.island.begin(.speaking, title: "Jarvis · M1 voice preview", detail: self.spokenAnswer)
+        }
+        speaker.onWord = { [weak self] range in
+            guard let self, self.phase == .speaking,
+                  let index = SpokenWords.index(for: range, in: self.spokenAnswer) else { return }
+            self.island.update(wordIndex: index)
+        }
+        speaker.onFailure = { [weak self] _ in
+            self?.island.notice("Voice stopped · the full reply is shown")
+        }
     }
 
     func pressToTalk() {
         guard phase == .idle, !buttonHeld else { return }
         buttonHeld = true
+        if !muted { speaker.warm() }
         latestPhrase = ""
         generation += 1
         let current = generation
@@ -287,6 +301,7 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func ask(_ question: String) {
+        if !muted { speaker.warm() }
         guard phase == .idle else { return }
         let value = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
@@ -343,59 +358,40 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
             paceMutedText(answer)
             return
         }
-        phase = .speaking
-        island.begin(.speaking, title: kind == .answer ? "Jarvis" : "Update", detail: answer)
-        let utterance = AVSpeechUtterance(string: answer)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
-        activeUtterance = utterance
-        synthesizer.speak(utterance)
+        let current = generation
+        phase = .renderingSpeech
+        island.begin(.thinking, title: "Preparing M1 voice preview", detail: answer)
+        speechTask = Task { [weak self] in
+            guard let self else { return }
+            await self.speaker.say(answer)
+            guard !Task.isCancelled, self.generation == current,
+                  self.phase == .renderingSpeech || self.phase == .speaking else { return }
+            self.finishReply()
+        }
     }
 
     private func paceMutedText(_ answer: String) {
-        let words = SpokenWords.expression.matches(in: answer,
-            range: NSRange(location: 0, length: (answer as NSString).length))
+        let wordCount = SpokenWords.expression.matches(in: answer,
+            range: NSRange(location: 0, length: (answer as NSString).length)).count
         var index = 0
         mutedTimer?.invalidate()
         mutedTimer = Timer.scheduledTimer(withTimeInterval: 60 / Self.mutedWordsPerMinute,
                                           repeats: true) { [weak self] timer in
-            guard let self, self.phase == .mutedReply else { timer.invalidate(); return }
-            if index >= words.count {
-                timer.invalidate()
-                self.finishReply()
-            } else {
-                self.island.update(wordIndex: index)
-                index += 1
+            MainActor.assumeIsolated {
+                guard let self, self.phase == .mutedReply else { timer.invalidate(); return }
+                if index >= wordCount {
+                    timer.invalidate()
+                    self.finishReply()
+                } else {
+                    self.island.update(wordIndex: index)
+                    index += 1
+                }
             }
         }
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           willSpeakRangeOfSpeechString characterRange: NSRange,
-                           utterance: AVSpeechUtterance) {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.speechSynthesizer(synthesizer, willSpeakRangeOfSpeechString: characterRange,
-                                        utterance: utterance)
-            }
-            return
-        }
-        guard phase == .speaking, activeUtterance === utterance else { return }
-        if let index = SpokenWords.index(for: characterRange, in: utterance.speechString) {
-            island.update(wordIndex: index)
-        }
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didFinish utterance: AVSpeechUtterance) {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in self?.speechSynthesizer(synthesizer, didFinish: utterance) }
-            return
-        }
-        if phase == .speaking, activeUtterance === utterance { finishReply() }
     }
 
     private func finishReply() {
-        activeUtterance = nil
+        speechTask?.cancel(); speechTask = nil
         deliveringBackground = false
         phase = .idle
         island.end(spokenKind, text: spokenAnswer)
@@ -411,9 +407,9 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
         buttonHeld = false
         mutedTimer?.invalidate()
         networkTask?.cancel()
-        activeUtterance = nil
+        speechTask?.cancel(); speechTask = nil
         deliveringBackground = false
-        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        speaker.stop()
         stopCapture()
         phase = .idle
         island.end(.status, text: requestWasRunning ? "Reply dismissed" : "Cancelled")
@@ -425,9 +421,10 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
 
     func toggleMute() {
         muted.toggle()
-        if phase == .speaking && muted {
-            activeUtterance = nil
-            synthesizer.stopSpeaking(at: .immediate)
+        if (phase == .speaking || phase == .renderingSpeech) && muted {
+            generation += 1
+            speechTask?.cancel(); speechTask = nil
+            speaker.stop()
             phase = .mutedReply
             island.begin(.mutedReply, title: "Jarvis", detail: spokenAnswer)
             paceMutedText(spokenAnswer)
@@ -493,10 +490,10 @@ final class Conversation: NSObject, AVSpeechSynthesizerDelegate {
 
     private func stopBackgroundSpeech() {
         guard deliveringBackground else { return }
-        activeUtterance = nil
+        speechTask?.cancel(); speechTask = nil
         deliveringBackground = false
         mutedTimer?.invalidate()
-        synthesizer.stopSpeaking(at: .immediate)
+        speaker.stop()
         phase = .idle
         island.end(.status, text: "")
         spokenAnswer = ""
