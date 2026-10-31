@@ -41,6 +41,13 @@ FRAME_CACHE_SIZE = 16
 FRAME_TTL_S = 900
 JOB_KINDS = ("general", "code", "computer", "document")
 BOSS_EFFORT = "max"
+VOICE_QUICK_EFFORT = "low"
+VOICE_SHORT_ANSWER_WORDS = 18
+VOICE_ANSWER_GUIDE = (
+    " This is a spoken conversation. Lead with the direct answer. For a simple question, aim for one "
+    f"natural sentence of at most {VOICE_SHORT_ANSWER_WORDS} words, without an introduction or a closing offer. Provide full detail when the "
+    "user requests it or the question requires it. Keep all required evidence and calculation fields."
+)
 CREW_PROFILES = (("gpt-6.1-sol", "medium"), ("gpt-6-luna", "max"), ("gpt-6-luna", "high"))
 EXTRA_WORKER_PROFILE = ("gpt-6-luna", "high")
 EXPLICIT_WORKERS = re.compile(r"\b(?:use|run|spawn|assign)\b[^.!?]{0,60}\b(?:workers|agents)\b", re.I)
@@ -532,7 +539,7 @@ class UltraJarvis:
                 self._event("checkpoint_saved")
 
     def answer(self, settings, system, notes, history, question, image=None, kind="chat", manual_model=None,
-               automatic=False, watch_token=None, workflow=None, resume_run=None, preferences=None):
+               automatic=False, watch_token=None, workflow=None, resume_run=None, preferences=None, conversational=False):
         with self._lock:
             self.monitor.begin()
             self._evaluation, self._run, self._run_id = None, None, None
@@ -646,8 +653,13 @@ class UltraJarvis:
                     parallel_allowed = settings.parallel_workers_enabled and not NO_WORKERS.search(question)
                     adaptive_route = routing.decide(question, workflow=workflow, parallel=parallel_allowed,
                         max_workers=settings.max_workers) if settings.adaptive_routing_enabled else None
+                    quick_voice = (conversational and image is None and manual_model is None
+                        and workflow is None and resume_run is None
+                        and routing.decide(question, parallel=False).mode == 'quick')
                     if adaptive_route is not None:
                         self._route = adaptive_route.public()
+                        if quick_voice:
+                            self._route = dict(self._route, effort=VOICE_QUICK_EFFORT)
                         boss_effort = adaptive_route.effort if adaptive_route.mode != "quick" else routing.STRONG_EFFORT
                         if not self._run and workflow is None:
                             local = routing.local_answer(question, notes, calculate)
@@ -673,7 +685,8 @@ class UltraJarvis:
                                if settings.adaptive_routing_enabled else
                                "or multiple independent deliverables route to brain with the appropriate job kind. ") +
                             "For brain routes response may contain an empty answer and empty arrays. Do not include a rationale.",
-                            payload, DISPATCH_SCHEMA, dispatch)
+                            payload, DISPATCH_SCHEMA, dispatch,
+                            effort=VOICE_QUICK_EFFORT if quick_voice else None)
                     if decision["route"] == "direct" and (decision["job"] == "general" or adaptive_route is not None):
                         return self._result(decision["response"])
                     if adaptive_route is not None and adaptive_route.mode != "team" and not self._run:

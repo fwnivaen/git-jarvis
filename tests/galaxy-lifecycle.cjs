@@ -24,3 +24,18 @@ for(const point of points){const key=Math.floor(point.x/32)+1+(Math.floor(point.
 const pick=new Function('spatial','spatialColumns','performance',`const GALAXY={hitCell:32,hitRadius:14},stats={hoverMs:0,maxHoverMs:0};${picker};return pick;`)(spatial,columns,{now:()=>0});
 assert.equal(pick(0,12).id,1);assert.equal(pick(126,12).id,2);assert.equal(pick(33,35).id,3);assert.equal(pick(36,36).id,4);assert.equal(pick(80,80),null);assert.equal(pick(0,70),null);
 console.log('GALAXY PICKING PASS: nearest notes, negative border cells, right edge and empty-space refusal.');
+
+// Regression: a visible, settled dashboard used to submit GPU work continuously,
+// competing with local speech even when orbit was off.
+const framePolicy=source.slice(source.indexOf('  function needsFrames('),source.indexOf('  function frameTick('));
+const policy=new Function('state',`const {document,visible,reducedMotion,continuous,speechBusy,awakeUntil,motions,detachRemaining}=state;${framePolicy};return needsFrames(1000);`);
+const settled={document:{hidden:false},visible:true,reducedMotion:false,continuous:false,speechBusy:false,awakeUntil:900,motions:new Map(),detachRemaining:0};
+assert.equal(policy(settled),false,'settled galaxy must yield the GPU');
+assert.equal(policy({...settled,awakeUntil:1100}),true,'interaction must remain responsive');
+assert.equal(policy({...settled,continuous:true}),true,'an enabled orbit still moves');
+assert.equal(policy({...settled,continuous:true,speechBusy:true}),false,'speech generation takes priority over decorative orbit');
+assert.equal(policy({...settled,continuous:true,reducedMotion:true}),false,'reduced motion still applies');
+assert.equal(policy({...settled,motions:new Map([[1,{}]])}),true,'layout must finish');
+assert.equal(policy({...settled,detachRemaining:2}),true,'initial cleanup must finish');
+assert.equal(policy({...settled,document:{hidden:true},continuous:true}),false,'hidden tabs stay paused');
+console.log('GALAXY GPU IDLE PASS: settled views yield the GPU; interaction, layout and explicit orbit remain live.');

@@ -25,8 +25,8 @@ MAX_JOBS = 128
 MAX_QUEUE = 8
 JOB_TTL_S = 3600
 JOB_TIMEOUT_S = 180
-WORKER_IDLE_S = 120
-ACTIVE_IDLE_S = 180            # while in active use (several replies recently) the model stays resident longer
+WORKER_IDLE_S = 300
+ACTIVE_IDLE_S = 600            # avoid paying cold startup between conversational turns
 ACTIVE_WINDOW_S = 900
 ACTIVE_REPLIES = 2
 BACKGROUND_DELAY_S = 2.0        # background renders start only after the voice has been idle this long
@@ -76,11 +76,13 @@ class LocalSpeech:
         self.cancelled_requests = {}
         self.queue = queue.Queue(MAX_QUEUE)
         self.process = None
+        self.worker_ready = False
         self.active = None
         self.closed = False
         self.thread = None
         self.fingerprint = self._fingerprint()
         self.recent = collections.deque(maxlen=ACTIVE_REPLIES)
+        self.last_activity = time.monotonic()
         # Short phrases (acknowledgements) rendered only while the voice is idle;
         # any real reply cancels one in progress and it is retried later.
         self.background = collections.OrderedDict()
@@ -116,6 +118,7 @@ class LocalSpeech:
             return {'available': self.available(), 'profile': self.profile['name'],
                     'version': self.profile['version'], 'local': True,
                     'warm': self.process is not None and self.process.poll() is None,
+                    'ready': self.worker_ready,
                     'queued': sum(row['state'] == 'queued' for row in self.jobs.values()),
                     'active': bool(self.active), 'paid_fallback': False, 'engine': self.profile['engine'], 'preview': True}
 
@@ -175,6 +178,7 @@ class LocalSpeech:
                 self._prepare(text, plan, key)
                 return {'request_id': request_id, 'state': 'not_cached', 'cached': False, 'profile': self.profile['name']}
             if not cached_only:
+                self.last_activity = time.monotonic()
                 self.recent.append(time.monotonic())
             job_id = secrets.token_hex(16)
             row = {'id': job_id, 'request_id': request_id, 'key': key, 'text': text,
@@ -264,12 +268,17 @@ class LocalSpeech:
         with self.lock:
             if self.closed or not self.available():
                 return {'warm': False}
+            self.last_activity = time.monotonic()
             if not (self.process is not None and self.process.poll() is None):
                 self._start()
                 self._write({'op': 'warm', 'id': secrets.token_hex(16)})
             if self.thread is None or not self.thread.is_alive():
                 self.thread = threading.Thread(target=self._run, daemon=True, name='jarvis-voice')
                 self.thread.start()
+            try:
+                self.queue.put_nowait(WAKE)
+            except queue.Full:
+                pass
             return {'warm': True}
 
     def part(self, job_id, index):
@@ -355,6 +364,7 @@ class LocalSpeech:
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, text=True, bufsize=1, cwd=self.root, env=environment,
             start_new_session=True)
+        self.worker_ready = False
         threading.Thread(target=self._read, args=(self.process,), daemon=True).start()
 
     def _read(self, process):
@@ -374,6 +384,10 @@ class LocalSpeech:
                 with self.lock:
                     if self.process is not process:
                         return
+                    if packet.get('state') == 'warm_ready':
+                        self.worker_ready = True
+                        self.lock.notify_all()
+                        continue
                     row = self.jobs.get(packet.get('id'))
                     if not row or row['id'] != self.active:
                         continue
@@ -383,6 +397,8 @@ class LocalSpeech:
                             row['worker_done'] = True
                     elif state in ACTIVE_STATES:
                         row['state'] = state
+                        if state == 'generating':
+                            self.worker_ready = True
                         parts = packet.get('parts')
                         if state == 'streaming' and isinstance(parts, int) and row.get('parts', 0) < parts <= MAX_PARTS:
                             row['parts'] = parts
@@ -404,6 +420,7 @@ class LocalSpeech:
             with self.lock:
                 if self.process is process:
                     self.process = None
+                    self.worker_ready = False
                     if self.active in self.jobs:
                         row = self.jobs[self.active]
                         if row['state'] != 'cancelled':
@@ -417,6 +434,7 @@ class LocalSpeech:
         while not self.closed:
             queued = True
             with self.lock:
+                idle_since = max(idle_since, self.last_activity)
                 idle = time.monotonic() - idle_since
                 wait = self._idle_timeout() - idle
                 warm = self.process is not None and self.process.poll() is None
@@ -428,6 +446,7 @@ class LocalSpeech:
                 with self.lock:
                     if not self.queue.empty():
                         continue
+                    idle_since = max(idle_since, self.last_activity)
                     idle = time.monotonic() - idle_since
                     warm = self.process is not None and self.process.poll() is None
                     if self.background and warm and idle >= BACKGROUND_DELAY_S:
@@ -510,6 +529,7 @@ class LocalSpeech:
 
     def _stop_process(self):
         process, self.process = self.process, None
+        self.worker_ready = False
         if process is None:
             return
         self._dispose_process(process)

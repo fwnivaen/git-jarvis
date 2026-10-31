@@ -1,7 +1,7 @@
 {
   "name": "JARVIS \u00b7 M1 voice preview",
   "engine": "qwen3-tts-0.6b-base-8bit",
-  "version": "m1-briefing-reference-v1",
+  "version": "m1-briefing-reference-v2",
   "pilot_directory": ".local/qwen-voice-candidate",
   "model_directory": "model",
   "model_repo": "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
@@ -23,7 +23,7 @@
   "peak_oversampling": 4,
   "output_rate": 44100,
   "native_rate": 24000,
-  "playback_mode": "complete",
+  "playback_mode": "adaptive",
   "approval": "Alternative engine preview; original Fish target preserved. Perceptual match needs user listening.",
   "temperature": 0.9,
   "stream_chunk_s": 0.5

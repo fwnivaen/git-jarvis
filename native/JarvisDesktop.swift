@@ -98,6 +98,7 @@ final class JarvisAppDelegate: NSObject, NSApplicationDelegate {
         }
         switch mode {
         case .normal:
+            conversation.prepareVoice()
             conversation.restoreBackgroundPause()
             installMenu()
             let handsFree = HandsFreeController(island: island,

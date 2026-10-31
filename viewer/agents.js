@@ -140,8 +140,10 @@
       try{
         const data=await read('/agents');if(destroyed)return;
         if(typeof data.enabled!=='boolean'||!Array.isArray(data.agents)||!data.limits)throw Error('Invalid activity');
+        window.JarvisGalaxy?.setSpeechBusy?.(data.speech_busy===true);
         renderLegacy(data);
       }catch{
+        window.JarvisGalaxy?.setSpeechBusy?.(false);
         if(last)last.connected=false;
         if(!currentWorkflow()){status.textContent='Activity connection interrupted';renderConstellation();}
       }

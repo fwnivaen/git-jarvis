@@ -63,7 +63,7 @@ export function createGalaxy({graph,THREE,getData,stage,labels,onSelect,onClear,
   let nodes=[],links=[],nodeRef,linkRef,stars,edges,focusEdges,sparks,starSizes=[],labelIds=[],edgeKeys=[],detachRemaining=0;
   let selected=null,highlighted=new Set(),activeLinks=new Set(),activeGroup=null,hovered=null,hoverNeighbors=new Set(),hoverLinks=new Set(),preview=null;
   let frame=null,ticking=false,resuming=false,disposed=false,awakeUntil=0,lastFrame=0,lastReport=0,lastProjection=0,projectionDirty=true,spatialColumns=0;
-  let projectedWidth=0,projectedHeight=0,pointerDown=null,pickPending=null,interactionSource='system',continuous=false,visible=true,worker=null,workerTimer=null;
+  let projectedWidth=0,projectedHeight=0,pointerDown=null,pickPending=null,interactionSource='system',continuous=false,speechBusy=false,visible=true,worker=null,workerTimer=null;
   let composer=null,composerWidth=0,composerHeight=0,composerDpr=0;
   const settleTimers=new Set(),motions=new Map();
   const nativeComposer=graph.postProcessingComposer?.(),nativeComposerRender=nativeComposer?.render;
@@ -157,6 +157,9 @@ export function createGalaxy({graph,THREE,getData,stage,labels,onSelect,onClear,
     if(node)for(const l of links)if(endId(l.source)===node.id||endId(l.target)===node.id){hoverNeighbors.add(endId(l.source));hoverNeighbors.add(endId(l.target));hoverLinks.add(key(l));}
     host.style.cursor=node?'pointer':'';projectionDirty=true;updateBuffers();emit('hover',{node:node||null});
   }
+  // Leave a settled galaxy on screen without occupying the shared M1 GPU.
+  // Interaction, layout work and an explicitly enabled orbit still animate.
+  function needsFrames(now){return !document.hidden&&visible&&(now<awakeUntil||motions.size>0||detachRemaining>0||!speechBusy&&!reducedMotion&&continuous);}
   function frameTick(now){frame=null;if(disposed)return;ticking=true;const dt=lastFrame?Math.min(GALAXY.maxDelta,(now-lastFrame)/1000):0;
     if(lastFrame){frameSamples.push(now-lastFrame);if(frameSamples.length>GALAXY.performanceSamples)frameSamples.shift();}lastFrame=now;
     if(getData().nodes!==nodeRef||getData().links!==linkRef)build();
@@ -173,7 +176,7 @@ export function createGalaxy({graph,THREE,getData,stage,labels,onSelect,onClear,
     if(pickPending&&!pointerDown){const p=pickPending;pickPending=null;showHover(pick(p.x,p.y));}
     stats.frames++;stats.drawCalls=renderer.info.render.calls;stats.triangles=renderer.info.render.triangles;if(stats.firstFrameMs===null)stats.firstFrameMs=Math.max(0,now-started);
     if(now-lastReport>GALAXY.reportMs){lastReport=now;const sorted=[...frameSamples].sort((a,b)=>a-b);stats.frameMs=frameSamples.reduce((a,b)=>a+b,0)/Math.max(1,frameSamples.length);stats.p95FrameMs=sorted[Math.floor(sorted.length*GALAXY.performanceQuantile)]||0;host.dataset.performance=JSON.stringify(stats);}
-    const active=!document.hidden&&visible&&(!reducedMotion||now<awakeUntil);ticking=false;
+    const active=needsFrames(now);ticking=false;
     if(active){if(frame===null)frame=requestAnimationFrame(frameTick);}else{stats.idle=true;lastFrame=0;graph.pauseAnimation();}
   }
   function wake(duration=GALAXY.idleSettleMs){if(disposed||document.hidden||!visible)return;awakeUntil=Math.max(awakeUntil,performance.now()+duration);stats.idle=false;if(!resuming){resuming=true;try{graph.resumeAnimation();}finally{resuming=false;}}if(frame===null&&!ticking)frame=requestAnimationFrame(frameTick);}
@@ -204,7 +207,7 @@ export function createGalaxy({graph,THREE,getData,stage,labels,onSelect,onClear,
   document.getElementById('zoom-in')?.addEventListener('click',zoomIn);document.getElementById('zoom-out')?.addEventListener('click',zoomOut);document.getElementById('fit')?.addEventListener('click',fit);
   window.addEventListener('jarvis:pins',pinsChanged);window.addEventListener('pagehide',pageHide);
   build();applyTheme();wake(GALAXY.layoutMs);
-  const api={wake,project,worldPosition,fit,zoom,categoryColor,ease:hudEase,boot(){wake();},setReducedMotion(value){reducedMotion=Boolean(value);controls.enableDamping=!reducedMotion;wake();},setContinuous(value){continuous=Boolean(value);wake();},setVisible(value){visible=Boolean(value);visibility();},
+  const api={wake,project,worldPosition,fit,zoom,categoryColor,ease:hudEase,boot(){wake();},setReducedMotion(value){reducedMotion=Boolean(value);controls.enableDamping=!reducedMotion;wake();},setContinuous(value){continuous=Boolean(value);wake();},setSpeechBusy(value){const next=Boolean(value);if(next!==speechBusy){speechBusy=next;wake();}},setVisible(value){visible=Boolean(value);visibility();},
     refresh(){if(getData().nodes!==nodeRef||getData().links!==linkRef)build();else updateBuffers();wake();},
     highlight(state){const changed=selected!==state.selected;selected=state.selected;highlighted=state.highlighted;activeLinks=state.activeLinks;activeGroup=state.activeGroup;updateBuffers();projectionDirty=true;if(changed&&interactionSource==='system')emit('selection',selectionDetail('system'));wake();},previewGroup(group){preview=group;updateBuffers();projectionDirty=true;wake();},
     get performance(){return {...stats};},

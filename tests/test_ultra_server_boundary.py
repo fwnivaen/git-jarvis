@@ -87,6 +87,20 @@ class UltraServerBoundaryTests(unittest.TestCase):
         self.assertIs(self.bridge.calls[0]['schema'], ultra.DISPATCH_SCHEMA)
         self.assertFalse(self.runtime.monitor.snapshot()['active'])
 
+    def test_spoken_simple_question_uses_one_low_effort_call_and_keeps_sources(self):
+        value = self.request('Budget answer', [NOTE], conversational=True)
+        self.assertEqual(value['nodes'], [NOTE['id']])
+        self.assertEqual(len(self.bridge.calls), 1)
+        self.assertEqual(self.bridge.calls[0]['effort'], ultra.VOICE_QUICK_EFFORT)
+        self.assertIn(ultra.VOICE_ANSWER_GUIDE, self.bridge.calls[0]['system'])
+
+    def test_spoken_complex_question_keeps_the_strong_reasoning_path(self):
+        self.read_settings.return_value = (replace(self.settings, adaptive_routing_enabled=True), None)
+        self.request('Investigate this race condition', conversational=True)
+        self.assertEqual(len(self.bridge.calls), 1)
+        self.assertEqual(self.bridge.calls[0]['effort'], 'high')
+        self.assertEqual(self.bridge.calls[0]['model'], self.settings.brain_model)
+
     def test_image_request_with_chat_routing_off_still_completes_cheap_vision_branch(self):
         self.read_settings.return_value = (replace(self.settings, routing_enabled=False,
                                                   cheap_vision_enabled=True), None)

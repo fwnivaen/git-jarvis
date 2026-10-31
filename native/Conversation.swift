@@ -118,6 +118,10 @@ final class Conversation: NSObject {
         }
     }
 
+    func prepareVoice() {
+        if !muted { speaker.warm() }
+    }
+
     private func authorizeSpeech(_ current: Int) {
         let status = SFSpeechRecognizer.authorizationStatus()
         if status == .denied || status == .restricted {
@@ -326,7 +330,7 @@ final class Conversation: NSObject {
         request.httpMethod = "POST"
         request.timeoutInterval = Self.requestBudgetSeconds
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: ["question": value])
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["question": value, "voice": true])
         let current = generation
         networkTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             DispatchQueue.main.async {

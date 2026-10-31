@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const CONFIG = Object.freeze({bands:24,ticks:112,fft:1024,pixelRatio:2,minHz:80,maxHz:8000,
-    floorDB:-70,ceilingDB:-12,smoothing:.65,staleMs:600,activeFrameMs:16,idleFrameMs:16,
+    floorDB:-70,ceilingDB:-12,smoothing:.65,staleMs:600,activeFrameMs:33,idleFrameMs:100,
     cometMs:1600,idleBreathMs:6000,ringTurnMs:48000,micGain:4,renderTimeoutMs:16000,
     ringRadius:.405,tickRadius:.35,waveRadius:.23,coreRadius:.27,progressWidth:2,
     waveformWidth:1.4,tickWidth:1,dotRadius:1,staticDots:96,modelCharacters:44});
@@ -477,7 +477,7 @@ void main() {
   }
   function sync() {
     const next=selectedState();
-    if(next!==currentState){clearTimeout(previewTimer);preview=null;currentState=next;instrument.dataset.state=next;host.dataset.state=next;dirty=true;}
+    if(next!==currentState){clearTimeout(previewTimer);preview=null;currentState=next;instrument.dataset.state=next;host.dataset.state=next;dirty=true;window.JarvisGalaxy?.wake();}
     refreshLook();
     core.setAttribute('aria-pressed',String(voice.enabled));core.setAttribute('aria-label',voice.enabled?'Turn microphone off':'Turn microphone on');
     refreshDetail();
@@ -564,7 +564,7 @@ void main() {
   function draw(now) {
     if(stopped)return;animationFrame=requestAnimationFrame(draw);
     const active=currentState!=='IDLE'&&currentState!=='ERROR'&&currentState!=='OFFLINE';
-    const frameMs=reduced.matches?VISUAL.reducedFrameMs:CONFIG.activeFrameMs;
+    const frameMs=reduced.matches?VISUAL.reducedFrameMs:!active||currentState==='THINKING'?CONFIG.idleFrameMs:CONFIG.activeFrameMs;
     if(document.hidden||now-lastDraw<frameMs||reduced.matches&&!active&&!dirty)return;
     const delta=lastAnimation?Math.min(now-lastAnimation,VISUAL.maxFrameDeltaMs):0;lastAnimation=now;lastDraw=now;dirty=false;
     const size=instrument.clientWidth;if(!size)return;ctx.clearRect(0,0,size,size);

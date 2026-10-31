@@ -7,6 +7,7 @@ let ACKNOWLEDGEMENT_MAX_S = 2.5
 let ACKNOWLEDGEMENT_POLL_S = 0.04
 let WORD_PROGRESS_MAX_CHARS_PER_S = 45.0
 let ACKNOWLEDGEMENTS: [String] = []
+let OUTPUT_WARM_IDLE_S = 60.0
 
 @MainActor
 final class Speaker: NSObject {
@@ -14,6 +15,8 @@ final class Speaker: NSObject {
     private var engine: AVAudioEngine?
     private var node: AVAudioPlayerNode?
     private var format: AVAudioFormat?
+    private var preparedOutput: (AVAudioEngine, AVAudioPlayerNode, AVAudioFormat)?
+    private var outputWarmExpiry: Task<Void, Never>?
     private var streaming: Task<Void, Error>?
     private var progress: Task<Void, Never>?
     private var finished: CheckedContinuation<Void, Never>?
@@ -30,6 +33,9 @@ final class Speaker: NSObject {
     private(set) var playing = false
     private(set) var preparingAudio = false
     private(set) var completed = false
+    private(set) var bufferUnderruns = 0
+    private(set) var bufferUnderrunSeconds = 0.0
+    private var underrunStarted: TimeInterval?
     var onPreparing: ((Bool) -> Void)?
     var onPlayback: ((Bool) -> Void)?
     var onFailure: ((String) -> Void)?
@@ -41,7 +47,24 @@ final class Speaker: NSObject {
     }
 
     /// Start loading the voice model while the user speaks; a no-op once it is resident.
-    func warm() { Task { [client] in await client.warm(prepare: ACKNOWLEDGEMENTS) } }
+    func warm() {
+        // Open the silent output graph before a reply needs its first frames.
+        try? prepareOutput()
+        Task { [client] in await client.warm(prepare: ACKNOWLEDGEMENTS) }
+    }
+
+    private func prepareOutput() throws {
+        guard engine == nil else { return }
+        if preparedOutput == nil {
+            let e = AVAudioEngine(), n = AVAudioPlayerNode()
+            guard let f = AVAudioFormat(standardFormatWithSampleRate: Double(LOCAL_VOICE_RATE), channels: 1) else { throw LocalVoiceError.unavailable }
+            e.attach(n); e.connect(n, to: e.mainMixerNode, format: f)
+            e.prepare()
+            try e.start()
+            preparedOutput = (e, n, f)
+        }
+        renewOutputExpiry()
+    }
 
     private var acknowledgement: AVAudioPlayer?
     private var ackEpoch = 0                // bumped by stop() and say(): a pending acknowledgement is dropped
@@ -67,6 +90,7 @@ final class Speaker: NSObject {
         let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         requestID = id
         completed = false
+        bufferUnderruns = 0; bufferUnderrunSeconds = 0; underrunStarted = nil
         samples = []; playedBase = 0; lastHeardFrames = 0; scheduledFrom = 0; pendingBuffers = 0; streamComplete = false; estimate = nil
         anchors = []; anchorsComplete = false; failAfterDrain = false
         preparingAudio = true; onPreparing?(true)
@@ -112,7 +136,14 @@ final class Speaker: NSObject {
         streamComplete = complete
         guard !part.isEmpty else { if complete { finishIfDrained(id) }; return }
         samples += part
-        if engine != nil { schedule(part, id: id); return }
+        if engine != nil {
+            if let started = underrunStarted {
+                bufferUnderruns += 1
+                bufferUnderrunSeconds += ProcessInfo.processInfo.systemUptime - started
+                underrunStarted = nil
+            }
+            schedule(part, id: id); return
+        }
         guard acknowledgement?.isPlaying == true else { try startEngine(id: id, text: text); schedule(samples[...], id: id); return }
         guard deferredStart == nil else { return }       // samples keep accumulating until it starts
         let waitUntil = Date().addingTimeInterval(ACKNOWLEDGEMENT_MAX_S)
@@ -131,11 +162,12 @@ final class Speaker: NSObject {
     }
 
     private func startEngine(id: String, text: String) throws {
-        let e = AVAudioEngine(), n = AVAudioPlayerNode()
-        guard let f = AVAudioFormat(standardFormatWithSampleRate: Double(LOCAL_VOICE_RATE), channels: 1) else { throw LocalVoiceError.unavailable }
-        e.attach(n); e.connect(n, to: e.mainMixerNode, format: f)
-        e.prepare()
-        try e.start()
+        try prepareOutput()
+        guard let (e, n, f) = preparedOutput else { throw LocalVoiceError.unavailable }
+        preparedOutput = nil
+        outputWarmExpiry?.cancel(); outputWarmExpiry = nil
+        // A route change while the graph was idle may have stopped it.
+        if !e.isRunning { try e.start() }
         engine = e; node = n; format = f
         n.play()
         // A new output device (headphones, display audio) stops the engine: resume from the heard position.
@@ -191,6 +223,9 @@ final class Speaker: NSObject {
             Task { @MainActor in
                 guard let self, self.node === owner else { return }
                 self.pendingBuffers -= 1
+                if self.pendingBuffers == 0 && !self.streamComplete {
+                    self.underrunStarted = ProcessInfo.processInfo.systemUptime
+                }
                 self.finishIfDrained(id)
             }
         }
@@ -257,13 +292,17 @@ final class Speaker: NSObject {
         if let id { Task { [client] in await client.cancel(id) } }
     }
 
-    private func teardown() {
+    private func teardown(keepOutput: Bool = false) {
         progress?.cancel(); progress = nil
         if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
         configObserver = nil
         // Interrupted mid-word: a short fade instead of a click. The reply is already
         // detached (no callbacks or progress reach it), so nothing can play after Stop.
-        if let node, let engine, node.isPlaying, playing {
+        if keepOutput, let engine, let node, let format {
+            node.stop()
+            preparedOutput = (engine, node, format)
+            renewOutputExpiry()
+        } else if let node, let engine, node.isPlaying, playing {
             let mixer = engine.mainMixerNode, steps = 6
             Task { @MainActor in
                 for step in 1...steps {
@@ -279,11 +318,22 @@ final class Speaker: NSObject {
         samples = []
     }
 
+    private func renewOutputExpiry() {
+        outputWarmExpiry?.cancel()
+        outputWarmExpiry = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(OUTPUT_WARM_IDLE_S * 1e9)) }
+            catch { return }
+            guard let self else { return }
+            self.preparedOutput?.0.stop(); self.preparedOutput = nil
+            self.outputWarmExpiry = nil
+        }
+    }
+
     private func complete(_ id: String) {
         guard requestID == id else { return }
         requestID = nil; streaming = nil
         deferredStart?.cancel(); deferredStart = nil
-        teardown()
+        teardown(keepOutput: completed)
         if preparingAudio { preparingAudio = false; onPreparing?(false) }
         if playing { playing = false; onPlayback?(false) }
         let continuation = finished; finished = nil; continuation?.resume()

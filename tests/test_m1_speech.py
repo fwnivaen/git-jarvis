@@ -8,6 +8,8 @@ from unittest.mock import patch
 import wave
 
 from local_speech import LocalSpeech
+from local_speech_worker import Engine, playback_buffer_ready
+from m1_voice_runtime import cache_reference_speaker
 import server
 from test_offline import request
 
@@ -90,6 +92,38 @@ class SpeechTests(unittest.TestCase):
         finally:
             diagnostic.close()
         self.assertTrue(audio.is_file())
+
+
+class SpeechStartupTests(unittest.TestCase):
+    def test_warming_primes_audio_once_without_rendering_a_reply(self):
+        engine = Engine({}, Path('.'), Path('.'), lambda _id: False)
+        engine.ready = True
+        from unittest.mock import Mock
+        engine.model = Mock()
+        engine.warm()
+        engine.warm()
+        engine.model.warm.assert_called_once_with()
+        self.assertTrue(engine.primed)
+
+    def test_reference_speaker_vector_is_identical_and_other_audio_is_not_reused(self):
+        from unittest.mock import Mock
+        reference, other, vector = object(), object(), object()
+        base = Mock()
+        extract = base.extract_speaker_embedding
+        extract.return_value = vector
+        cache_reference_speaker(base, reference)
+        self.assertIs(base.extract_speaker_embedding(reference), vector)
+        self.assertIs(base.extract_speaker_embedding(reference), vector)
+        extract.assert_called_once_with(reference)
+        base.extract_speaker_embedding(other)
+        self.assertEqual(extract.call_count, 2)
+        extract.assert_called_with(other)
+
+    def test_slow_generation_keeps_a_buffer_and_fast_generation_can_start_early(self):
+        self.assertFalse(playback_buffer_ready(.96, 0, 0, 8))
+        self.assertFalse(playback_buffer_ready(1.92, .96, 1.44, 8))
+        self.assertTrue(playback_buffer_ready(3.84, 2.88, 4.32, 8))
+        self.assertTrue(playback_buffer_ready(1.92, .96, .6, 8))
 
 
 if __name__ == '__main__':

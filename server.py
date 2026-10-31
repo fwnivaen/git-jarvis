@@ -809,9 +809,11 @@ def _ask_brain(system, notes, history, question, image=None, webcam=False):
 
 
 def answer_request(system, notes, history, question, image=None, webcam=False, automatic=False, watch_token=None,
-                   workflow=None, resume_run=None):
+                   workflow=None, resume_run=None, conversational=False):
     """Flag-off path is the existing brain, including its exact override behavior."""
     settings, _ = ultra.Settings.read(ULTRA_CONFIG_PATH)
+    if conversational and image is None and workflow is None and resume_run is None:
+        system += ultra.VOICE_ANSWER_GUIDE
     with MODEL_LOCK:
         manual = ACTIVE_BRAIN
     if (not settings.enabled or (image is None and not settings.routing_enabled)
@@ -836,7 +838,7 @@ def answer_request(system, notes, history, question, image=None, webcam=False, a
         result = ULTRA.answer(settings, system, notes, history, question, image=image,
             kind="webcam" if webcam else "screen" if image is not None else "chat",
             manual_model=manual[1] if manual else None, automatic=automatic, watch_token=watch_token,
-            workflow=workflow, resume_run=resume_run, preferences=preferences)
+            workflow=workflow, resume_run=resume_run, preferences=preferences, conversational=conversational)
         with ULTRA._source_lock:
             sources = [dict(note) for note in getattr(ULTRA, '_sources', notes)]
         return bind_brain_sources(result, sources)
@@ -1356,7 +1358,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/agents":
             settings, notice = ultra.Settings.read(ULTRA_CONFIG_PATH)
-            self.send_bytes(json.dumps(ULTRA.public_state(settings, notice)).encode(), "application/json", head=head)
+            state = ULTRA.public_state(settings, notice)
+            voice = SPEECH.status()
+            state['speech_busy'] = voice['active'] or voice['queued'] > 0 or voice['warm'] and not voice['ready']
+            self.send_bytes(json.dumps(state).encode(), "application/json", head=head)
             return
         if path in ("/agents/workflows", "/agents/runs"):
             settings, _ = ultra.Settings.read(ULTRA_CONFIG_PATH)
@@ -1794,6 +1799,8 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(question, str) or not 0 < len(question.strip()) <= MAX_QUESTION_CHARS:
                 raise ValueError
             question = question.strip()
+            if 'voice' in body and (self.path != '/chat' or not isinstance(body['voice'], bool)):
+                raise ValueError
             for name, limit in (("workflow", MAX_WORKFLOW_CHARS), ("resume_run", MAX_RESUME_RUN_CHARS)):
                 option = body.get(name)
                 if option is not None and (self.path != "/chat" or not isinstance(option, str)
@@ -1899,6 +1906,8 @@ class Handler(BaseHTTPRequestHandler):
             eye_status = {key: eyes[key] for key in ('eyes_active', 'present', 'head_down', 'slouched')}
             system = SYSTEM_PROMPT + " Current local posture status (no image): " + json.dumps(eye_status)
             options = {name: body[name] for name in ("workflow", "resume_run") if body.get(name) is not None}
+            if body.get('voice') is True:
+                options['conversational'] = True
             result = apply_model_control(answer_request(system, notes, history, question, **options))
             if BRAIN.active_path is not None:
                 result['local_memory'] = {'source': 'obsidian', 'selected_source_chars': sum(len(note['text']) for note in notes),

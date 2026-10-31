@@ -152,11 +152,12 @@ console.log('VOICE PASS: activation, reference-conditioned local voice, 900ms bu
   }
   Object.assign(app.context, {console, AbortController, fetch: (path, options) => {request = {path, options}; return response;}});
   vm.runInNewContext("const $ = id => document.getElementById(id); let screenMode = false, screenGeneration = 0; let busy = false, highlighted, activeLinks, selected; const GRAPH = {nodes: [], links: []}; const SETTINGS = {chatTimeoutMs: 100000, timePrecision: 2}; function isModelCommand() { return false; } function holdCamera() {} function showAnswerSources() {} function linkKey() {} function refreshHighlights() {}", app.context);
-  vm.runInNewContext(html.match(/async function ask\(question\)\{[\s\S]*?(?=\n<\/script>)/)[0], app.context);
+  vm.runInNewContext(html.match(/async function ask\(question[\s\S]*?(?=\n<\/script>)/)[0], app.context);
   vm.runInNewContext(html.match(/const CAPTURE_TRIGGER = .*;/)[0], app.context);
   const pendingReply = app.context.ask('A typed question');
   assert.equal(request.path, '/chat');
   assert.equal(JSON.parse(request.options.body).question, 'A typed question');
+  assert.equal(JSON.parse(request.options.body).voice, undefined);
   app.tick(BRAIN_WAIT);
   assert.equal(app.el('voice-status').textContent, 'Thinking…');
   assert.equal(app.el('mic').disabled, false);
@@ -166,6 +167,8 @@ console.log('VOICE PASS: activation, reference-conditioned local voice, 900ms bu
   assert.equal(app.el('voice-status').textContent, 'Ready');
   assert.equal(app.el('mic').disabled, false);
   assert.equal(app.speech.length, 0);
+  await app.context.ask('A spoken question', {voice: true});
+  assert.equal(JSON.parse(request.options.body).voice, true);
   console.log('CHAT PASS: shared /chat request, full delayed-response thinking, response display, mic recovery, mute.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

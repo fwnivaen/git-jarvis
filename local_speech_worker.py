@@ -30,8 +30,8 @@ LONG_TEXT_BYTES = 400
 SHORT_TEXT_BYTES = 1000
 SAFE_EDGE_FADE_S = .003
 DEFAULT_SAMPLE_RATE = 44100
-# Qwen generates in native chunks with continuous resampling. The M1 profile
-# buffers a complete reply: cold decoder compilation can otherwise underrun.
+# Qwen generates in native chunks with continuous resampling. Playback starts
+# when the measured generation rate leaves enough buffered audio to finish.
 STREAM_CHUNK_S = 0.5
 SPOKEN_CHARS_PER_S = 16.0     # conservative initial estimate; generation rate is measured per reply
 DIGIT_EXTRA_CHARS = 4         # digits are read out as words
@@ -45,6 +45,14 @@ MAX_ALIGNED_CHARS_PER_S = 25.0  # about 1.4x this voice's measured speaking rate
 ALIGN_CHARS_PER_S = 17.5      # measured speaking rate, for word-progress alignment only
 OPENING_BIAS_DB = 0.0         # no opening-level correction for the M1 preview
 PROTOCOL_STDOUT = sys.stdout
+
+
+def playback_buffer_ready(generated, after_first, elapsed, estimate):
+    """Keep enough audio ahead of the measured decoder to cover its remainder."""
+    if after_first <= 0 or generated < GAIN_WINDOW_S:
+        return False
+    remaining = max(0.0, estimate - generated)
+    return remaining * elapsed / after_first <= generated + remaining - PLAYBACK_MARGIN_S
 
 
 class Cancelled(Exception):
@@ -61,6 +69,7 @@ class Engine:
         self.cancelled = cancelled
         self.model = None
         self.ready = False
+        self.primed = False
         self.current_id = None
         self.frames = 0
 
@@ -72,6 +81,7 @@ class Engine:
         if self.ready:
             return
         self.check()
+
         import mlx.core as mx
         import numpy as np
         import soundfile as sf
@@ -84,6 +94,13 @@ class Engine:
         self.target_level = speech_rms(wave, self.rate)
         self.aligner = None
         self.ready = True
+        self.check()
+
+    def warm(self):
+        self.load()
+        if not self.primed:
+            self.model.warm()
+            self.primed = True
         self.check()
 
     def load_aligner(self):
@@ -208,14 +225,8 @@ class Engine:
             # the buffered plus still-to-come playback, with a margin.
             at, first = state['first_chunk']
             produced = (state['generated'] - first) / rate
-            if produced <= 0:
-                return False
             generated = state['generated'] / rate
-            if generated < GAIN_WINDOW_S:
-                return False
-            remaining = max(0.0, estimate - generated)
-            seconds_per_audio = (time.monotonic() - at) / produced
-            return remaining * seconds_per_audio <= generated + remaining - PLAYBACK_MARGIN_S
+            return playback_buffer_ready(generated, produced, time.monotonic() - at, estimate)
 
         # Short approved replies stay one continuous render. Native long-form
         # batching retains the model's conversation and speaker context.
@@ -364,7 +375,8 @@ def main():
             try:
                 engine.current_id = packet['id']
                 with contextlib.redirect_stdout(sys.stderr):
-                    engine.load()
+                    engine.warm()
+                emit(packet['id'], 'warm_ready')
             except Exception:
                 if not engine.ready:
                     engine.model = None
