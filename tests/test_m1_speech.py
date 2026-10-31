@@ -122,8 +122,13 @@ class SpeechStartupTests(unittest.TestCase):
     def test_slow_generation_keeps_a_buffer_and_fast_generation_can_start_early(self):
         self.assertFalse(playback_buffer_ready(.96, 0, 0, 8))
         self.assertFalse(playback_buffer_ready(1.92, .96, 1.44, 8))
-        self.assertTrue(playback_buffer_ready(3.84, 2.88, 4.32, 8))
+        self.assertFalse(playback_buffer_ready(3.84, 2.88, 4.32, 8))
+        self.assertTrue(playback_buffer_ready(4.8, 3.84, 5.76, 8))
         self.assertTrue(playback_buffer_ready(1.92, .96, .6, 8))
+        # The opening of a real 6 s take ran at 0.94x, then slowed to 1.32x.
+        # One second buffered was insufficient; retain another batch first.
+        self.assertFalse(playback_buffer_ready(1, .5, .47, 6))
+        self.assertTrue(playback_buffer_ready(2, 1.5, 1.48, 6))
 
 
 if __name__ == '__main__':

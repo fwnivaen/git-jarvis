@@ -48,6 +48,17 @@ VOICE_ANSWER_GUIDE = (
     f"natural sentence of at most {VOICE_SHORT_ANSWER_WORDS} words, without an introduction or a closing offer. Provide full detail when the "
     "user requests it or the question requires it. Keep all required evidence and calculation fields."
 )
+VOICE_DISPATCH_GUIDE = (
+    " This first spoken turn has no tools. Answer general knowledge and conversation directly; "
+    "they do not require notes. Answer note questions only from the supplied evidence. "
+    "If the request needs an action, live information, saved preferences not supplied here, or more source "
+    "retrieval, return route brain with an empty response so the next turn can use the registered tools. "
+    "Never claim an action happened in this first turn."
+)
+VOICE_TOOL_INTENT = re.compile(
+    r"\b(?:notes?|my|our|remember|save|capture|search|find|lookup|read|show|open|edit|write|"
+    r"create|delete|forget|import|export|preferences?|current|latest|today|now|"
+    r"start|stop|cancel|pause|resume|enable|disable|watch|set|update|change)\b|\b(?:look up|turn on|turn off)\b", re.I)
 CREW_PROFILES = (("gpt-6.1-sol", "medium"), ("gpt-6-luna", "max"), ("gpt-6-luna", "high"))
 EXTRA_WORKER_PROFILE = ("gpt-6-luna", "high")
 EXPLICIT_WORKERS = re.compile(r"\b(?:use|run|spawn|assign)\b[^.!?]{0,60}\b(?:workers|agents)\b", re.I)
@@ -656,6 +667,7 @@ class UltraJarvis:
                     quick_voice = (conversational and image is None and manual_model is None
                         and workflow is None and resume_run is None
                         and routing.decide(question, parallel=False).mode == 'quick')
+                    defer_voice_tools = quick_voice and not VOICE_TOOL_INTENT.search(question)
                     if adaptive_route is not None:
                         self._route = adaptive_route.public()
                         if quick_voice:
@@ -677,7 +689,7 @@ class UltraJarvis:
                         decision = {"route": "brain", "job": workflow if workflow in JOB_KINDS else "general"}
                     else:
                         decision = self._job(settings, budget, request_deadline, "dispatch", settings.quick_model,
-                            system + (" Classify and answer in one call. Focused code extraction or explanation can route direct too. "
+                            system + (VOICE_DISPATCH_GUIDE if defer_voice_tools else "") + (" Classify and answer in one call. Focused code extraction or explanation can route direct too. "
                             "Use brain only when this request needs complex reasoning; worker allocation is controlled locally. "
                             if settings.adaptive_routing_enabled else "") + " Classify the request. For quick chat, retrieval, summaries and simple questions, route direct "
                             "and answer now in response. Code/debug/test work, computer actions, dense documents, hard reasoning "
@@ -686,7 +698,7 @@ class UltraJarvis:
                                "or multiple independent deliverables route to brain with the appropriate job kind. ") +
                             "For brain routes response may contain an empty answer and empty arrays. Do not include a rationale.",
                             payload, DISPATCH_SCHEMA, dispatch,
-                            effort=VOICE_QUICK_EFFORT if quick_voice else None)
+                            effort=VOICE_QUICK_EFFORT if quick_voice else None, tools_allowed=not defer_voice_tools)
                     if decision["route"] == "direct" and (decision["job"] == "general" or adaptive_route is not None):
                         return self._result(decision["response"])
                     if adaptive_route is not None and adaptive_route.mode != "team" and not self._run:

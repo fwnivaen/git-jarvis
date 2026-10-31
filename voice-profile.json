@@ -1,5 +1,5 @@
 {
-  "name": "JARVIS \u00b7 M1 voice preview",
+  "name": "JARVIS",
   "engine": "qwen3-tts-0.6b-base-8bit",
   "version": "m1-briefing-reference-v2",
   "pilot_directory": ".local/qwen-voice-candidate",

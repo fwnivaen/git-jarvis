@@ -36,6 +36,7 @@ STREAM_CHUNK_S = 0.5
 SPOKEN_CHARS_PER_S = 16.0     # conservative initial estimate; generation rate is measured per reply
 DIGIT_EXTRA_CHARS = 4         # digits are read out as words
 PLAYBACK_MARGIN_S = 0.8
+GENERATION_RATE_HEADROOM = 1.2  # allow later batches to run slower than the measured opening
 GAIN_WINDOW_S = 0.9           # the uniform level is set from this fixed opening, so a take always gets the same gain
 ALIGNER_DIRECTORY = 'models/qwen3-forced-aligner-0.6b-8bit'   # mlx-community/Qwen3-ForcedAligner-0.6B-8bit @ 0e1a68e9
 ALIGNER_SHA256 = 'be19ef8ac4326d032e7673342930b14c2df30bd68c1632493b0f563e30829f91'
@@ -52,7 +53,7 @@ def playback_buffer_ready(generated, after_first, elapsed, estimate):
     if after_first <= 0 or generated < GAIN_WINDOW_S:
         return False
     remaining = max(0.0, estimate - generated)
-    return remaining * elapsed / after_first <= generated + remaining - PLAYBACK_MARGIN_S
+    return remaining * elapsed / after_first * GENERATION_RATE_HEADROOM <= generated + remaining - PLAYBACK_MARGIN_S
 
 
 class Cancelled(Exception):

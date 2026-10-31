@@ -172,7 +172,7 @@ class LocalSpeech:
                 else:
                     raise ValueError('Voice is busy. Please try again shortly.')
             if not self.available():
-                raise ValueError('The M1 voice preview is not available on this Mac.')
+                raise ValueError('The local voice is not available on this Mac.')
             if cached_only and not self._valid_cache(key):
                 # Never a generation wait: schedule it for idle time and answer now.
                 self._prepare(text, plan, key)

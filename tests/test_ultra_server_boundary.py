@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import server
 import ultra
+import ultra_tools
 
 THREAD_TIMEOUT_S = 2
 FRAME = b'\xff\xd8\xff\x00\xff\xd9'
@@ -93,6 +94,44 @@ class UltraServerBoundaryTests(unittest.TestCase):
         self.assertEqual(len(self.bridge.calls), 1)
         self.assertEqual(self.bridge.calls[0]['effort'], ultra.VOICE_QUICK_EFFORT)
         self.assertIn(ultra.VOICE_ANSWER_GUIDE, self.bridge.calls[0]['system'])
+
+    def enable_tools(self):
+        settings = replace(self.settings, adaptive_routing_enabled=True, tools_enabled=True)
+        self.read_settings.return_value = (settings, None)
+        self.runtime.tool_layer = ultra_tools.Registry(lambda: settings, {'notes_search': lambda query: {'notes': []}})
+
+    def test_spoken_dispatch_defers_tool_catalog_but_typed_chat_keeps_it(self):
+        self.enable_tools()
+        self.request('Why do leaves turn brown?', conversational=True)
+        self.assertNotIn('tools', self.bridge.calls[0])
+        self.assertIn(ultra.VOICE_DISPATCH_GUIDE, self.bridge.calls[0]['system'])
+        self.request('Why do leaves turn brown?')
+        self.assertIn('tools', self.bridge.calls[1])
+        self.assertNotIn(ultra.VOICE_DISPATCH_GUIDE, self.bridge.calls[1]['system'])
+
+    def test_spoken_action_can_escalate_to_a_turn_with_registered_tools(self):
+        self.enable_tools()
+        def handle(call):
+            value = answer_for(call)
+            if call['schema'] is ultra.DISPATCH_SCHEMA:
+                value['route'] = 'brain'
+                return value
+            self.assertIn('tools', call)
+            return value
+        self.bridge.handler = handle
+        value = self.request('What was agreed about the budget?', [NOTE], conversational=True)
+        self.assertFalse(value.get('error'), value)
+        self.assertEqual(value['nodes'], [NOTE['id']])
+        self.assertEqual(len(self.bridge.calls), 2)
+        self.assertNotIn('tools', self.bridge.calls[0])
+        self.assertIn('tools', self.bridge.calls[1])
+
+    def test_explicit_spoken_action_gets_tools_without_an_extra_classification_turn(self):
+        self.enable_tools()
+        self.request('Search my notes for budget evidence', [NOTE], conversational=True)
+        self.assertEqual(len(self.bridge.calls), 1)
+        self.assertIn('tools', self.bridge.calls[0])
+        self.assertNotIn(ultra.VOICE_DISPATCH_GUIDE, self.bridge.calls[0]['system'])
 
     def test_spoken_complex_question_keeps_the_strong_reasoning_path(self):
         self.read_settings.return_value = (replace(self.settings, adaptive_routing_enabled=True), None)

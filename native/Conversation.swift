@@ -83,7 +83,7 @@ final class Conversation: NSObject {
         speaker.onPlayback = { [weak self] playing in
             guard let self, playing, self.phase == .renderingSpeech else { return }
             self.phase = .speaking
-            self.island.begin(.speaking, title: "Jarvis · M1 voice preview", detail: self.spokenAnswer)
+            self.island.begin(.speaking, title: "Jarvis", detail: self.spokenAnswer)
         }
         speaker.onWord = { [weak self] range in
             guard let self, self.phase == .speaking,
@@ -364,7 +364,7 @@ final class Conversation: NSObject {
         }
         let current = generation
         phase = .renderingSpeech
-        island.begin(.thinking, title: "Preparing M1 voice preview", detail: answer)
+        island.begin(.thinking, title: "Preparing voice", detail: answer)
         speechTask = Task { [weak self] in
             guard let self else { return }
             await self.speaker.say(answer)

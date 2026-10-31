@@ -467,8 +467,8 @@ void main() {
   function refreshDetail() {
     const muted = new URLSearchParams(location.search).getAll('mute').includes('1');
     let message=explicit?.message||voice.notice||'';
-    if(!message)message=currentState==='SPEAKING'?(voice.externalSpeaking?'Native JARVIS voice · output spectrum unavailable':outputUnavailable?'M1 voice preview · spectrum unavailable':'M1 voice preview · local audio'):
-      currentState==='THINKING'?(outputLoading?'Preparing M1 voice preview':'Working on your request'):currentState==='LISTENING'?(voice.wakeListening?'Awaiting “Jarvis” · microphone enabled':'Listening · say stop to interrupt'):
+    if(!message)message=currentState==='SPEAKING'?(voice.externalSpeaking?'Native JARVIS voice · output spectrum unavailable':outputUnavailable?'JARVIS voice · spectrum unavailable':'JARVIS voice · local audio'):
+      currentState==='THINKING'?(outputLoading?'Preparing voice':'Working on your request'):currentState==='LISTENING'?(voice.wakeListening?'Awaiting “Jarvis” · microphone enabled':'Listening · say stop to interrupt'):
       currentState==='OFFLINE'?'Local server disconnected · reconnect to resume':currentState==='CONFIRM'||currentState==='AWAITING APPROVAL'?'Waiting for your confirmation':currentState==='ERROR'?'Reconnect or choose an input':muted?'Silent session · hold Space to talk':'Hold Space to talk';
     detail.textContent=message;
     const micLive=voice.enabled&&(browserMic||(native&&Date.now()-native.received<CONFIG.staleMs));
