@@ -5,7 +5,7 @@
 The user approved installing Obsidian, creating a separate Brain, merging local main and restarting Jarvis together. These actions are complete:
 
 - Official, notarized Obsidian 1.14.5 is installed at `~/Applications/Obsidian.app`. Strict signature verification and Gatekeeper assessment passed.
-- Obsidian visibly opened `~/Documents/Jarvis Brain`. Four starter notes cover setup, Nivaen's supplied details, the Jarvis project and memory rules. No account, community plugin or sync subscription was added.
+- Obsidian visibly opened `~/Documents/Jarvis Brain`. Four starter notes cover setup, the owner's supplied details, the Jarvis project and memory rules. No account, community plugin or sync subscription was added.
 - The local main checkout runs the updated server on loopback port 4700, connected to this Brain. Both native helper bundles were updated; one normal desktop helper is running.
 - The original 30 notes and private configuration were verified unchanged during activation. The earlier revision and native bundles remain available for rollback.
 - Hands-free is off. No login startup registration or GitHub push was performed.

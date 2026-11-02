@@ -45,11 +45,11 @@ STARTER_FILES = {
         'Decisions for agreed choices, and Daily for your own daily notes.\n\n'
         'Jarvis uses selected relevant passages, not this entire folder, for model requests. '
         'Explicit local note searches can run without a model. This folder is not a transcript recorder.\n',
-    'Knowledge/About me.md': '---\naliases: [Nivaen, Sir]\ntags: [profile]\n---\n# About me\n\n'
-        '- Name: Nivaen Giritharan.\n- Preferred address from Jarvis: Sir.\n'
-        '- Location: New York, NY.\n- Timezone: America/New_York, including daylight saving.\n'
-        '- GitHub: fwnivaen.\n',
-    'Projects/Jarvis.md': '# Jarvis\n\nPersonal local voice assistant for [[Knowledge/About me|Nivaen]].\n\n'
+    'Knowledge/About me.md': '---\naliases: [Sir]\ntags: [profile]\n---\n# About me\n\n'
+        '- Name: (fill in your name).\n- Preferred address from Jarvis: Sir.\n'
+        '- Location: (fill in your city).\n- Timezone: (fill in your IANA timezone, e.g. America/New_York).\n'
+        '- GitHub: (fill in your GitHub handle).\n',
+    'Projects/Jarvis.md': '# Jarvis\n\nPersonal local voice assistant for [[Knowledge/About me|you]].\n\n'
         'Use the existing ChatGPT/Codex login for reasoning. No paid API key is required.\n'
         'Keep proposed actions reviewable and verify their results.\n',
     'Decisions/Memory rules.md': '# Memory rules\n\nSave facts only when explicitly requested or reviewed. '

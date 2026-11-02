@@ -10,7 +10,7 @@ The actual repository is `fwnivaen/Jarvis`, with `server.py` listening on loopba
 
 The discovered Mac is a MacBookPro17,1 with an Apple M1 chip, 8 GB memory, macOS 27.0.1 and a 1280×800 display. Its screen reports a zero-point top safe-area inset, so the live Island uses the flat pill layout. No hardware detail from an imported handoff was assumed.
 
-Private `config.json` remains ignored and stayed in the original checkout. The new worktree has no copied config or Codex credentials. No API key is needed for the normal signed-in CLI path. The local server source now identifies Nivaen Giritharan, New York and `America/New_York`, with a daylight-saving-aware capture timestamp. Its speech still addresses the user as Sir.
+Private `config.json` remains ignored and stayed in the original checkout. The new worktree has no copied config or Codex credentials. No API key is needed for the normal signed-in CLI path. The local server source now identifies the configured owner profile and local timezone, with a daylight-saving-aware capture timestamp. Its speech still addresses the user as Sir.
 
 ## Isolated implementation
 

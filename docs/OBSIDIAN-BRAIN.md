@@ -4,7 +4,7 @@ A **vault** is simply a folder of notes. Obsidian edits those notes; Jarvis sear
 
 ## Connected setup
 
-The running build includes a **Brain** tab and a separate four-note starter folder for Nivaen Giritharan. It includes a start guide, About me, Jarvis project and memory rules, plus Inbox, Knowledge, Projects, Decisions, Daily and Private folders. Existing demonstration notes are preserved.
+The running build includes a **Brain** tab and a separate four-note starter folder for the project owner. It includes a start guide, About me, Jarvis project and memory rules, plus Inbox, Knowledge, Projects, Decisions, Daily and Private folders. Existing demonstration notes are preserved.
 
 Obsidian 1.14.5 is installed at `~/Applications/Obsidian.app`; the shared notes live at `~/Documents/Jarvis Brain`. The user approved installation, local-main merge and coordinated restart on 2026-10-28. Obsidian visibly opened the folder, and the running Jarvis Brain search returned About me with no model call. The original 30 notes and private configuration were preserved. No account, paid service, community plugin or startup service was added.
 
