@@ -51,7 +51,7 @@ enum MicrophoneCheck {
                     return 1
                 }
                 let summary = MicrophoneSampleSummary()
-                try input.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(Conversation.meterSamples),
+                try input.jarvisInstallTap(onBus: 0, bufferSize: AVAudioFrameCount(Conversation.meterSamples),
                                           format: format) { buffer, _ in summary.accept(buffer) }
                 let startedAt = ProcessInfo.processInfo.systemUptime
                 do {

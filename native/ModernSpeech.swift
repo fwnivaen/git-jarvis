@@ -120,9 +120,9 @@ final class ModernCapture: @unchecked Sendable {
                                     onFinished: onFinished, onError: onError)
         do {
             try Task.checkCancellation()
-            try input.installAudioTap(onBus: 0, bufferSize: bufferFrames, format: format) { [weak capture] buffer, time in
+            try input.jarvisInstallTap(onBus: 0, bufferSize: bufferFrames, format: format) { [weak capture] buffer, time in
                 guard let capture else { return }
-                let copy = CopiedPCM(buffer: AVAudioPCMBuffer(copying: buffer))
+                let copy = CopiedPCM(buffer: AVAudioPCMBuffer.deepCopy(of: buffer))
                 let level = meter.measure(buffer)
                 DispatchQueue.main.async { capture.onLevel(level) }
                 capture.conversionQueue.async {

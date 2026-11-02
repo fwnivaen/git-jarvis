@@ -229,9 +229,9 @@ final class Conversation: NSObject {
         meter = MicrophoneMeter()
         let meter = self.meter
         do {
-            try input.installAudioTap(onBus: 0, bufferSize: AVAudioFrameCount(Self.meterSamples),
+            try input.jarvisInstallTap(onBus: 0, bufferSize: AVAudioFrameCount(Self.meterSamples),
                                       format: format) { [weak self] buffer, _ in
-                request.append(AVAudioPCMBuffer(copying: buffer))
+                request.append(AVAudioPCMBuffer.deepCopy(of: buffer))
                 let level = meter.measure(buffer)
                 DispatchQueue.main.async {
                     guard let self, self.generation == current, self.phase == .capturing else { return }
