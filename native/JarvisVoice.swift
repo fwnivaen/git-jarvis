@@ -139,7 +139,7 @@ func startListening() {
             publish("error", "The selected microphone is unavailable. Choose another input and try Mic again."); return
         }
         var device = selected.0
-        let selectedStatus: OSStatus = input.withAudioUnit { unit in
+        let selectedStatus: OSStatus = input.jarvisWithAudioUnit { unit in
             guard let unit else { return kAudio_ParamError }
             return AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioDeviceID>.size))
         }
@@ -157,8 +157,8 @@ func startListening() {
     session.shouldReportPartialResults = true
     let meter = SpectrumMeter()
     do {
-        try input.installAudioTap(onBus: 0, bufferSize: bufferFrames, format: format) { buffer, _ in
-        let copy = AVAudioPCMBuffer(copying: buffer)
+        try input.jarvisInstallTap(onBus: 0, bufferSize: bufferFrames, format: format) { buffer, _ in
+        let copy = AVAudioPCMBuffer.deepCopy(of: buffer)
         session.append(copy)
         if let metadata = meter.measure(copy) {
             DispatchQueue.main.async {
