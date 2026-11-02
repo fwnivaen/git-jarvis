@@ -1,6 +1,6 @@
 # Jarvis remaining build plan
 
-Updated 2026-10-28. This is the implementation and acceptance plan for Nivaen Giritharan's attached request, including Obsidian. A prepared feature is not the same as a live accepted feature. The user approved local-main merge and coordinated activation on 2026-10-28. The new server/helper are running; Obsidian is installed and opened the connected Brain. The original revision, notes/configuration and earlier helper remain retained for rollback.
+Updated 2026-10-28. This is the implementation and acceptance plan for the project owner's attached request, including Obsidian. A prepared feature is not the same as a live accepted feature. The user approved local-main merge and coordinated activation on 2026-10-28. The new server/helper are running; Obsidian is installed and opened the connected Brain. The original revision, notes/configuration and earlier helper remain retained for rollback.
 
 ## Product approach
 

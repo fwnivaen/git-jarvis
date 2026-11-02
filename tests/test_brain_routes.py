@@ -140,7 +140,7 @@ class BrainRouteTests(unittest.TestCase):
         self.assertEqual((build.NOTES_DIR, server.WORKFLOWS.root, server.NOTE_ACTION_PATH), original_scope)
         self.assertEqual(server.NOTES, [])
         starter = self.brain.default_vault / 'Knowledge' / 'About me.md'
-        self.assertIn('Nivaen Giritharan', starter.read_text(encoding='utf-8'))
+        self.assertIn('fill in your name', starter.read_text(encoding='utf-8'))
         self.assertEqual(request('/brain/setup', 'POST', {'confirmed': True}, ORIGIN)[0], 400)
         self.assertFalse((self.brain.root / 'indexes').exists())
 

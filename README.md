@@ -1,84 +1,152 @@
 # Jarvis · Ultra Jarvis
 
-A personal AI assistant that connects a Markdown knowledge vault, a 3D galaxy, voice and a bounded team of collaborating agents.
-
-The 8 GB M1 uses a local voice preview conditioned on the approved briefing.
-See [voice setup, limitations and rollback](docs/m1-voice.md).
+A personal AI assistant for macOS that connects a Markdown knowledge vault, a 3D knowledge graph, voice, and a bounded team of collaborating AI agents — all running locally.
 
 [![Checks](https://github.com/fwnivaen/Jarvis/actions/workflows/ci.yml/badge.svg)](https://github.com/fwnivaen/Jarvis/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ![Jarvis galaxy with three real working agent signals and their shared constellation](docs/screenshots/agents-live.jpg)
 
-Jarvis runs on a local Python server with a plain JavaScript viewer and native macOS helpers. Notes, search indexes and runtime state live on your machine. Model requests use the signed-in ChatGPT/Codex account and require a verified included allowance; separately billed API providers are disabled. Selected note excerpts and explicit vision frames can leave the machine. The included 30-note café vault is fictional demonstration data. See the [usage policy and its limits](docs/usage-policy.md).
+## Overview
 
-## What it does
+Jarvis runs on a local Python HTTP server with a dependency-free JavaScript viewer and native macOS Swift helpers for voice and screen-watch. Your notes, search indexes, and runtime state stay on your machine — nothing is uploaded except the specific note excerpts or vision frames a request needs. The repository ships with a small, fictional 30-note "café business" vault so the whole system works out of the box with no setup beyond installing dependencies.
 
-- **Grounded knowledge:** search Markdown notes, follow citations into the galaxy, capture new notes and edit with revision checks.
-- **Collaborative agents:** a boss assigns work to up to three workers, shares their findings, checks their reports and returns one answer. Simple requests use a single cheaper call.
-- **Live activity:** compact Scout, Weave and Prism signals glow as agents work and connect around shared findings. The existing drawer and Work view show tools, timing, retries and reported tokens. Private reasoning is never displayed.
-- **Hybrid memory:** local semantic and keyword search, PDF/DOCX/XLSX text imports, and preferences that persist across sessions.
-- **Voice and vision:** an animated orb, browser/native speech, local posture landmarks, explicit camera questions and screen watch with local frame comparisons.
-- **Shared tools:** 10 note, preference, document and screen-watch tools available to the crew and an MCP stdio client.
+Model requests go through a signed-in ChatGPT/Codex CLI session (no separate API billing) or, optionally, OpenRouter if you supply your own key. See [docs/usage-policy.md](docs/usage-policy.md) for the exact data-handling policy.
 
-## Engineering highlights
+## Features
 
-The orchestration uses typed JSON contracts and local checks for source quotations and arithmetic. Workers share fixed deadlines, retry limits and one request-wide escalation budget. Failed work remains visible; partial answers are labelled. Checkpoints retain validated work and original budgets, and a durable tool journal prevents retries from repeating the same write.
+- **Grounded knowledge graph** — search Markdown notes, follow citations into an interactive 3D galaxy (Three.js), capture new notes, and edit with revision checks.
+- **Multi-agent collaboration** — a "boss" agent plans work and assigns it to up to three "worker" agents, who share findings and get peer-reviewed before the boss synthesizes one final answer. Simple questions skip straight to a single cheap call.
+- **Live agent visualization** — compact status signals glow in the galaxy as agents work, with a detailed drawer showing tool calls, timing, retries, and token usage.
+- **Hybrid memory** — local semantic + keyword search, PDF/DOCX/XLSX text import, and persistent preferences.
+- **Voice and vision** — an animated orb UI, native macOS speech recognition/synthesis, local posture tracking, explicit camera snapshots, and screen-watch with local frame comparison.
+- **MCP tool server** — the same note/preference/document/screen-watch tools are exposed over an MCP stdio adapter for use from other MCP clients.
+- **Visible agent workflows** — a dedicated "Work" view shows real parallel agent runs with cancel/retry and checkpoint recovery.
 
-The viewer has no frontend build step. Its custom Three.js renderer batches note geometry, preserves cached layouts as the vault grows and pauses when hidden. Sensor permissions remain explicit, posture inference stays in the browser, and the server binds only to loopback.
+## Architecture
 
-The core server and legacy crew use Python's standard library. Explicit Work-tab workflows use optional LangGraph and SQLite checkpoint packages. Optional search, document and MCP packages install inside a project-local virtual environment. CrewAI-style delegation and peer review are implemented directly rather than adding a second orchestration framework.
+```mermaid
+flowchart TD
+    UI[Galaxy, orb and voice] --> HTTP[Local Python server]
+    HTTP --> Memory[Hybrid note retrieval and preferences]
+    Memory --> Route[Routing / direct answer]
+    Route -->|simple| Answer[Answer with source IDs]
+    Route -->|complex| Boss[Boss agent plans work]
+    Boss --> Workers[Up to 3 concurrent workers]
+    Workers --> Shared[Validated reports and peer review]
+    Shared --> Final[Boss checks and synthesizes]
+    Final --> Answer
+    Answer --> UI
+    Workers <--> Tools[Typed Jarvis tool registry]
+    Tools <--> MCP[MCP stdio adapter]
+```
 
-## Run on macOS
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full request lifecycle, module responsibilities, and failure/recovery semantics.
 
-You need Python **3.11+** for the complete upgrade, Chrome, Apple command-line tools for the native helpers, and an installed, signed-in [Codex CLI](https://github.com/openai/codex). Node.js is needed only for the regression checks. Model availability depends on the signed-in account.
+## Screenshots
+
+| Agent collaboration | Workflows |
+| --- | --- |
+| ![Agents working together in the galaxy](docs/screenshots/agents-live.jpg) | ![A completed multi-step workflow run](docs/screenshots/workflows-complete.jpg) |
+
+More screenshots: [docs/screenshots/](docs/screenshots/).
+
+## Tech stack
+
+| Layer | Technology |
+| --- | --- |
+| Server | Python 3 standard library (`http.server`), optional LangGraph + SQLite checkpoints for workflows |
+| Viewer | Plain JavaScript, custom Three.js renderer — no frontend build step |
+| Voice / vision helpers | Swift (AVFoundation, Speech, AppKit) compiled to small macOS helper apps |
+| Model backend | ChatGPT/Codex CLI (default) or OpenRouter (optional, bring your own key) |
+| Optional memory | Qdrant (embedded, local) + FastEmbed for semantic search |
+| Tests | Python `unittest` (500+ tests), Node's built-in test runner for the viewer |
+
+## Prerequisites
+
+- macOS with Xcode Command Line Tools (`xcode-select --install`) — needed to compile the native voice/screen-watch helpers.
+- Python **3.11+**.
+- [Node.js](https://nodejs.org/) — only needed to run the viewer regression checks.
+- Google Chrome (or any modern browser) to use the viewer.
+- A signed-in, working [Codex CLI](https://github.com/openai/codex) install — this is the default model backend and needs no separate API key.
+  - Alternative: skip Codex and supply your own `openrouter_api_key` in `config.json` (see [Configuration](#configuration)) to use OpenRouter models instead.
+
+## Setup
 
 ```sh
 git clone https://github.com/fwnivaen/Jarvis.git
 cd Jarvis
-python3 tools/setup_ultra.py
+python3 tools/setup_ultra.py       # optional: installs local embeddings for semantic search
 python3 tools/ultra_settings.py enable
 ./start.sh
 ```
 
-Open [localhost:4700](http://localhost:4700). Setup downloads the optional local embedding model. The server creates its private configuration when missing; no API key is required for the Codex backend. Ultra is opt-in in the committed configuration, and disabling it restores the original route.
+Open [http://localhost:4700](http://localhost:4700) in Chrome. The server creates its own private `config.json` on first run — no manual setup is required for the default Codex backend.
 
-To inspect the galaxy without installing the optional packages or compiling native helpers:
+To run the original, minimal path without the optional packages or native helpers:
 
 ```sh
 python3 build.py
 python3 server.py
 ```
 
-This starts the original path. Cloud answers still require a configured, available backend. See the [complete setup guide](ULTRA-JARVIS.md) for Python selection, tools, flags and troubleshooting.
+For Python version selection, optional flags, and troubleshooting, see the [complete setup guide](ULTRA-JARVIS.md).
 
-## Visible agent workflows
+### Visible agent workflows
 
-Run `./start-workflows.sh` after setup, open [localhost:4700](http://localhost:4700), and select **Work**. Launch a task, follow real parallel agents and tool activity, inspect verified findings, cancel work, or retry a saved checkpoint within its original budget. Return to **Galaxy** to watch the compact three-agent constellation. LangGraph runs locally through the existing signed-in model connection; no hosted Studio is required. [Setup and controls](docs/WORKFLOWS.md) · [Agent visuals and checks](docs/agent-visuals.md) · [Measured comparison](docs/framework-evaluation.md).
+```sh
+./start-workflows.sh
+```
 
-## Try it
+Open [http://localhost:4700](http://localhost:4700) and select **Work** to launch a task and watch real parallel agents run. See [docs/WORKFLOWS.md](docs/WORKFLOWS.md).
 
-- “Who updates the Cash Flow Forecast, and when?”
-- “Use three workers to compare Menu Pricing, Opening Checklist and Launch Campaign.”
-- “Remember that the supplier review is next Tuesday.”
-- Import a document from Notes, or add an explicit preference in Settings.
+## Configuration
 
-The legacy chat crew's default model configuration uses a **Sol max** coordinator, with **Sol medium**, **Luna max** and **Luna high** workers. These remain runtime profiles; the Galaxy display uses three equal agent symbols. Exact model IDs and efforts are validated against the installed account catalog. The worker cap is configurable; the default deadline is 45 seconds with at most two retries and one escalation per request. Astra is manual-only in the Ultra route.
+Jarvis stores its settings in a local, git-ignored **`config.json`** at the repo root (not a `.env` file — the server reads no environment variables for its own configuration). A template with every supported key is provided at [`config.json.example`](config.json.example); copy it to get started:
+
+```sh
+cp config.json.example config.json
+```
+
+| Key | Purpose |
+| --- | --- |
+| `brain` | Model backend: `"codex-cli"` (default, uses your signed-in Codex session) |
+| `model` | Model ID to request from the backend, e.g. `"gpt-6-astra"` |
+| `openai_api_key` | Only used by optional direct-OpenAI code paths; leave as the placeholder if you only use Codex |
+| `openrouter_api_key` | Optional: your own [OpenRouter](https://openrouter.ai/) key, to use OpenRouter models instead of Codex |
+
+If you omit `config.json` entirely, the server writes one for you on first launch with safe placeholder values.
+
+Two environment variables affect the **build scripts only** (not runtime config): `JARVIS_VOICE_APP_PATH` and `JARVIS_SWIFT_MODULE_CACHE`, both optional overrides for where the compiled native helper apps land.
+
+## Usage
+
+- Ask questions grounded in the included vault, e.g. *"Who updates the Cash Flow Forecast, and when?"*
+- Request multi-agent collaboration explicitly, e.g. *"Use three workers to compare Menu Pricing, Opening Checklist and Launch Campaign."*
+- Save a preference: *"Remember that the supplier review is next Tuesday."*
+- Import a document from **Notes**, or add an explicit preference in **Settings**.
+- Hold **Control–Shift–Space** to speak, **Option–Escape** to cancel, **Option–Command–M** to mute (requires the native voice helper).
 
 ## Verify it
 
 ```sh
-python3 tools/check_repo.py
-python3 tools/check_ultra.py --embeddings
-python3 preflight.py
+python3 tools/check_repo.py          # repository hygiene (links, private-file leaks)
+python3 tools/check_ultra.py         # full Python + viewer regression suite
+python3 preflight.py                 # live checks against a running server (needs model access)
 ```
 
-The first two commands check repository hygiene and the regression suite. Full preflight requires the running Mac server, performs real model calls and cleans up its own temporary capture. CI runs the automated suite without account credentials or physical sensor access and builds the native helpers on macOS.
+CI (`.github/workflows/ci.yml`) runs the regression suite on Linux and compiles the native macOS helpers on `macos-latest`, without any account credentials or physical sensor access.
 
-Historical rollback baseline: the original Jarvis dashboard, voice flow, Codex / ChatGPT connection and adaptive agent workflows were restored. Focus, its tracking loop, native card, commands, tools, assets and probe remain removed. Rollback verification: **268 Python tests with zero skips**, **12 JavaScript suites**, and full live preflight **14 pass, 0 fail, 2 warn**. The warnings skip separate API-provider checks because the signed-in Codex backend is active. The restored Galaxy (30 notes, 95 links), Notes and Work views were checked visibly in Chrome. Both removed feature routes return 404; the added desktop app and command journal are removed locally.
+## Troubleshooting
 
-The official Deep Agents helper, durable execution controls, browser-worker preparation, offline GEPA/evaluation and reviewed promotion boundaries are implemented and fixture tested. New optional features stay off. **No remote deployment, live Deep Agents provider comparison, learning benefit, 24-hour soak or Mac-off independence is verified.** Oracle provisioning is blocked by the unavailable verified account. [Capability status and measurements](docs/upgrade-results.md) · [Persistent checklist](docs/upgrade-checklist.md) · [Evidence ledger](docs/upgrade-evidence.md) · [Contracts](docs/upgrade-contracts.md) · [Deployment instructions](deploy/remote/README.md).
-
-Max-effort workers can reach the 45-second limit; the system returns an explicitly partial result. Document imports extract text rather than OCR or chart images. General computer control and email sending are not exposed by the tool registry. Physical audio, camera accuracy and macOS permissions require local acceptance testing.
+| Symptom | Likely cause / fix |
+| --- | --- |
+| `./start.sh` exits immediately with a model/backend error | Codex CLI isn't installed or isn't signed in. Run `codex` directly to check, or switch to OpenRouter in `config.json`. |
+| Native voice helper fails to build | Confirm Xcode Command Line Tools are installed and up to date: `xcode-select --install`. |
+| Microphone / speech doesn't work | Grant Microphone and Speech Recognition permissions to the compiled helper app in **System Settings → Privacy & Security**. |
+| Blank or stale galaxy after editing notes | Re-run `python3 build.py` to regenerate `viewer/graph-data.js`, or restart the server. |
+| `config.json` seems to have the wrong shape | Delete it and restart — the server recreates it with safe defaults on next launch. |
+| Semantic search says "not ready" | Run `python3 tools/setup_ultra.py` to install the optional local embedding model. |
 
 ## Explore the code
 
@@ -94,12 +162,6 @@ Max-effort workers can reach the 45-second limit; the system returns an explicit
 
 [Architecture](docs/ARCHITECTURE.md) · [Usage](docs/USAGE.md) · [Documentation index](docs/README.md) · [Third-party notices](THIRD_PARTY.md)
 
-## Voice, Island and Obsidian Brain
+## License
 
-The approved voice/Island and Brain build is merged into local `main` and running on port 4700. Hold **Control–Shift–Space** to speak, use **Option–Escape** to cancel and **Option–Command–M** to mute. The previous revision and helper are retained for rollback. Startup registration and GitHub pushing were not requested.
-
-Obsidian 1.14.5 is installed in the user Applications folder and opened **Documents/Jarvis Brain**. Its four starter notes are shared with Jarvis through Markdown and local FTS5. Brain searches and exact note reads can avoid a model call; synthesis still uses the signed-in Codex route. The 30 original notes and private configuration are preserved. [Brain guide](docs/OBSIDIAN-BRAIN.md) · [Controls](docs/LOCAL-CONTROLS.md) · [Remaining plan](docs/BUILD-PLAN.md).
-
-The build includes two-task admission, Work previews/recovery, editable Word export, note/preference review and exact-state undo, saved-task removal controls, activity and selected-data export, opt-in local health/resource settings and background delivery. Hands-free is an optional preview, off each launch; immediate screen-lock shutoff and acoustic acceptance remain unverified.
-
-Verification: **490 Python tests, 8 skipped, 0 failures; 16 JavaScript suites; 494 native assertions**. Full preflight on the activated main server: **14 pass, 0 fail, 2 warn**. Real sourced tasks, the two-task limit, reviewed test-task removal and old-request blocking passed. The activated server also completed a sourced task and exported its answer as valid editable Word content. See the [activation record](docs/ACTIVATION-2026-10-28.md) for proof, rollback and remaining physical acceptance.
+[MIT](LICENSE)
