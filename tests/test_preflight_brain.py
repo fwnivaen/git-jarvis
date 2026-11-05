@@ -1,5 +1,6 @@
 """Checker selects local Brain safely without activating/indexing it or live HTTP."""
 import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -42,7 +43,7 @@ class PreflightBrainTests(unittest.TestCase):
                        'obsidian_brain.BrainIndex._open', 'server.configure_brain_startup',
                        'server.subprocess.Popen', 'server.urllib.request.urlopen'):
             self.stack.enter_context(patch(target, side_effect=AssertionError('Activation/live work forbidden')))
-        self.harness = preflight.Harness('http://127.0.0.1:4700', True)
+        self.harness = preflight.Harness('http://127.0.0.1:4700', True, allow_capture_cleanup=True)
         self.harness.graph = self.graph
         self.stack.enter_context(patch.object(self.harness, 'request', side_effect=self.request))
 
@@ -74,6 +75,24 @@ class PreflightBrainTests(unittest.TestCase):
         self.assertIsNone(self.brain.active_path)
         self.assertFalse((self.brain.root / 'indexes').exists())
         self.assertFalse(list(self.root.rglob('*.sqlite*')))
+
+    def test_default_full_and_quick_checks_preserve_notes_without_capture_requests(self):
+        for quick in (False, True):
+            with self.subTest(quick=quick):
+                harness = preflight.Harness('http://127.0.0.1:4700', quick)
+                with patch.object(harness, 'request') as request, patch.object(harness, 'notes_directory') as scope:
+                    with self.assertRaisesRegex(preflight.CheckWarning, '--allow-capture-cleanup'):
+                        harness.capture()
+                request.assert_not_called()
+                scope.assert_not_called()
+        self.assertEqual(len(list(self.vault.iterdir())), 1)
+        self.assertFalse((self.vault / 'captures').exists())
+
+    def test_capture_skip_is_reported_as_warning_instead_of_pass(self):
+        harness = preflight.Harness('http://127.0.0.1:4700', False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            harness.run('Capture', harness.capture)
+        self.assertEqual(harness.counts, {'pass': 0, 'fail': 0, 'warn': 1})
 
     def test_selected_settings_and_live_scope_choose_vault_without_checker_activation(self):
         self.configured()

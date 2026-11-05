@@ -1,5 +1,7 @@
 # Ultra Jarvis verification
 
+> Historical checkpoints. For the current review, see [Verification](VERIFICATION.md). Focus timers and activity tracking are removed; old Focus probes below are retained as historical evidence only.
+
 ## Compact agent visuals — October 23, 2026
 
 The Galaxy's legacy hierarchy has been replaced by three equal agent signals, without changes to agent execution. One-, two- and three-agent states, shared-work connections, review, completion, offline/recovery, mobile, light mode, reduced motion, collapse and full view were checked. A browser-launched three-agent workflow completed in 24.8 seconds. See the [visual design, real screenshot, labelled fixture screenshots and reproducible checks](agent-visuals.md).
@@ -57,7 +59,7 @@ The repository now has a concise project overview, architecture and usage guides
 | Local Python suite with real embeddings | **163 tests passed** |
 | JavaScript regressions | **14 suites passed** |
 | Clean clone without private configuration or credentials | **163 tests run, 162 passed, 1 optional embedding test skipped**; all **14 JavaScript suites passed** |
-| GitHub CI | [Python/viewer regressions and native macOS helper builds passed](https://github.com/fwnivaen/Jarvis/actions/runs/39911589688) |
+| GitHub CI | [Python/viewer regressions and native macOS helper builds passed](https://github.com/fwnivaen/git-jarvis/actions/runs/39911589688) |
 | Latest full live preflight | **14 pass, 0 fail, 2 warn** |
 | Fresh visible Focus probe | **FOCUS PROBE: 16 pass, 0 fail \| 1440x900**; the full title was read and the temporary viewport override was reset |
 

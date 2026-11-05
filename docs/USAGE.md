@@ -4,7 +4,7 @@ Start from the repository with `./start.sh`, then open [localhost:4700](http://l
 
 ## Notes and the galaxy
 
-The included café notes are fictional examples. Your Markdown belongs under `notes/`; `[[Note Title]]` links form the graph. Search with Command-K, select a star to inspect its note, or use the Notes workspace for reading and editing. Editing requires confirmation and the current file revision. External file edits require a rebuild/restart and browser reload.
+The included café notes are fictional examples. For your own notes, [connect an external Obsidian vault](OBSIDIAN-BRAIN.md); the `notes/` demo is tracked by Git. `[[Note Title]]` links form the graph. Search with Command-K, select a star to inspect its note, or use the Notes workspace for reading and editing. Editing requires confirmation and the current file revision. For a connected vault, use **Brain → Refresh notes** after edits; source retrieval also refreshes the index. The unconnected demo path needs a rebuild/restart and browser reload after external edits.
 
 Ask a question about a note to receive source chips. Selecting a source reveals the supporting note in the galaxy. Unsupported answers should say when the vault lacks the information. Greetings and general chat do not move the camera to unrelated notes.
 
@@ -42,7 +42,7 @@ Screen watch uses one Entire Screen share selected through the browser. Local th
 
 ## Checks and troubleshooting
 
-Run `python3 tools/check_repo.py` and `python3 tools/check_ultra.py --embeddings` for repository and regression checks. With the server active, run full `python3 preflight.py`. It makes real model calls and creates, recalls and removes a disposable capture. API-backend skips are warnings.
+Run `python3 tools/check_repo.py` and `python3 tools/check_ultra.py` for repository and regression checks. Add `--embeddings` after installing the optional local model. With the server active, run full `python3 preflight.py`; it makes real model calls and tests model switching. Capture creation/recall/cleanup is skipped by default and reported as a warning. `--allow-capture-cleanup` explicitly permits creating and deleting one disposable verification note; use a separate demo vault for that check. Model/API skips are warnings, not passes.
 
 Verify the original Jarvis dashboard visibly in Chrome. On-device microphone recognition and audible output need physical acceptance checks; automated fixtures do not establish those results.
 

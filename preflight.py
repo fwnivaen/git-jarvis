@@ -1,6 +1,6 @@
 """Live Jarvis checks. Start server.py first; no mocks or replacement brain.
 
---quick skips model inference, but still writes and cleans a real capture.
+--quick skips model inference. Capture creation/cleanup is opt-in in every mode.
 Only PASS/FAIL/WARN verdicts count; skipped chains are never passes.
 """
 import argparse
@@ -108,9 +108,10 @@ def valid_answer(value, allowed=()):
 
 
 class Harness:
-    def __init__(self, url, quick):
+    def __init__(self, url, quick, *, allow_capture_cleanup=False):
         self.url = url.rstrip('/')
         self.quick = quick
+        self.allow_capture_cleanup = allow_capture_cleanup
         self.counts = dict.fromkeys(('pass', 'fail', 'warn'), 0)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         self.page = None
@@ -347,6 +348,8 @@ class Harness:
         return 'fake version/paid-provider refusals, real Codex swap and answer, reset to config passed'
 
     def capture(self):
+        if not self.allow_capture_cleanup:
+            raise CheckWarning('skipped: capture creation/cleanup requires --allow-capture-cleanup; notes preserved')
         notes_directory = self.notes_directory()
         # Refuse to write a probe to a stale server without guaranteed cleanup support.
         status, capability = self.json_request('/preflight/status')
@@ -512,14 +515,17 @@ class Harness:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--quick', action='store_true', help='skip real brain calls; still check capture persistence and cleanup')
+    parser.add_argument('--quick', action='store_true', help='skip real brain calls')
+    parser.add_argument('--allow-capture-cleanup', action='store_true',
+                        help='allow creating and deleting one disposable verification note in the selected vault')
     parser.add_argument('--url', default=f'http://{server.HOST}:{server.PORT}', help='running local Jarvis URL')
     args = parser.parse_args()
     url = urllib.parse.urlsplit(args.url)
     if (url.scheme != 'http' or url.hostname not in ('127.0.0.1', 'localhost') or not url.port
             or url.username or url.password or url.path not in ('', '/') or url.query or url.fragment):
         parser.error('--url must be an http://127.0.0.1:PORT or http://localhost:PORT origin')
-    return Harness(args.url.rstrip('/'), args.quick).execute()
+    return Harness(args.url.rstrip('/'), args.quick,
+                   allow_capture_cleanup=args.allow_capture_cleanup).execute()
 
 
 if __name__ == '__main__':
