@@ -1,6 +1,6 @@
 # Included usage policy
 
-The user authorized continued implementation using free resources and their ChatGPT/Codex account. Separately billed inference, purchased credits, paid fallback, credit resets and paid hosting are not authorized. This policy applies to normal chat, screen/image questions, Ultra, graph workflows and the prepared Linux controller.
+Jarvis is configured to use a signed-in ChatGPT/Codex account and its included allowance. Separately billed API inference and automatic paid fallback are disabled. This policy applies to normal chat, screen/image questions, Ultra, graph workflows and the prepared Linux controller. Account entitlements and usage limits still apply; local operation does not mean model inference runs offline.
 
 ## Enforcement
 

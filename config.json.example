@@ -1,6 +1,4 @@
 {
   "brain": "codex-cli",
-  "model": "gpt-6-astra",
-  "openai_api_key": "PUT-YOUR-KEY-HERE",
-  "openrouter_api_key": "PUT-YOUR-KEY-HERE"
+  "model": "gpt-6-astra"
 }

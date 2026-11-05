@@ -1,5 +1,7 @@
 # Ultra Jarvis — complete upgrade
 
+For the basic demo and Obsidian connection, start with the [README](README.md) and [vault guide](docs/OBSIDIAN-BRAIN.md). This guide covers optional agent, memory, and workflow capabilities. The shipped usage policy allows signed-in Codex only; API keys do not enable OpenRouter or other paid backends. Focus timers and activity tracking are removed.
+
 This extends the existing Python server, Markdown vault, galaxy, orb, vision and native voice. The lightweight runtime incorporates CrewAI-style manager delegation, named roles, shared reports, peer review, structured evidence, reusable workflows, checkpoints, recovery and measured evaluations. It does not install the CrewAI framework. Agent tools perform requested operations without an additional per-action approval drawer; existing editor confirmations and sensor permissions still apply.
 
 ## Start on macOS
@@ -7,8 +9,8 @@ This extends the existing Python server, Markdown vault, galaxy, orb, vision and
 The checked-in master flag is off so the existing route remains available until you enable Ultra. From a fresh clone, install the optional dependencies into the project-local environment, enable the feature and start the launcher:
 
 ```sh
-git clone https://github.com/fwnivaen/Jarvis.git
-cd Jarvis
+git clone https://github.com/fwnivaen/git-jarvis.git
+cd git-jarvis
 python3 tools/setup_ultra.py
 python3 tools/ultra_settings.py enable
 ./start.sh
@@ -127,7 +129,7 @@ python3 tools/check_ultra.py --embeddings
 python3 preflight.py
 ```
 
-Run the second command with the upgraded server active. For the review server use `python3 preflight.py --url http://127.0.0.1:4701`. Inspect the original Jarvis dashboard visibly. Focus and its probe are removed. Test evidence and the current summary lines are in `docs/ultra-verification.md`.
+Run the second command with the upgraded server active. Capture creation/cleanup is skipped unless you explicitly pass `--allow-capture-cleanup`; without that flag, notes are preserved and the skipped chain is a warning. For a separate test server use `python3 preflight.py --url http://127.0.0.1:4701`. Inspect the original Jarvis dashboard visibly. Focus and its probe are removed. Current review results are in [Verification](docs/VERIFICATION.md); [earlier Ultra measurements](docs/ultra-verification.md) are historical.
 
 ## Verified dependencies and APIs — October 22, 2026
 

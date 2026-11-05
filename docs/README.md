@@ -1,30 +1,43 @@
-# Documentation
+# Jarvis documentation
 
-| Document | Purpose |
+## Start here
+
+| Guide | What you will learn |
 | --- | --- |
-| [Project overview](../README.md) | Features, demo, quick start and source map |
-| [Ultra Jarvis guide](../ULTRA-JARVIS.md) | Complete setup, model profiles, flags, tools, imports and recovery commands |
-| [Agent workflows](WORKFLOWS.md) | Launch, monitor, cancel and recover LangGraph work inside JARVIS |
-| [Galaxy agent visuals](agent-visuals.md) | Compact three-agent signals, state mapping, screenshots and visual test instructions |
-| [Voice and Island report](voice-island-report.md) | Current isolated native build, reconciliation, checks and activation limits |
-| [Voice feature catalog](voice-island-catalog.md) | Requirement status, dependencies and roadmap |
-| [Framework evaluation](framework-evaluation.md) | Source inspection, selection, baseline, live trials and bounded stress results |
-| [Remote execution investigation](remote-execution-recommendation.md) | Code-grounded feasibility, remote computers/live viewing, candidate comparison, costs and a proposed proof of concept |
-| [Execution upgrade results](upgrade-results.md) | Implemented versus verified capabilities, measurements and precise remaining gates |
-| [Execution upgrade checklist](upgrade-checklist.md) | Persistent file plan, dependencies, unfinished work and rollback |
-| [Execution upgrade evidence](upgrade-evidence.md) | Baseline, actual commands, live observations and limitations |
-| [Execution contracts](upgrade-contracts.md) | Ownership, scoped tools, workspace isolation and learning boundaries |
-| [Evaluation protocol](upgrade-evaluation.md) | Topic-disjoint five-arm comparison, costs, validators and promotion criteria |
-| [Obsidian Brain](OBSIDIAN-BRAIN.md) | Shared local notes, usage controls, privacy, setup and limits |
-| [Remaining build plan](BUILD-PLAN.md) | Ordered implementation and concrete acceptance gates |
-| [Local controls](LOCAL-CONTROLS.md) | Voice, previews, exact decisions, local operations and rollback |
-| [Saved task privacy](TASK-PRIVACY.md) | Explicit removal of settled Work contents, duplicate prevention and erasure limits |
-| [Architecture](ARCHITECTURE.md) | Request flow, module boundaries, validation and failure semantics |
-| [Usage](USAGE.md) | Notes, voice, Eyes and screen-watch controls |
-| [Current verification](ultra-verification.md) | Actual test results, live trials and known limits |
-| [Third-party notices](../THIRD_PARTY.md) | Bundled libraries, fonts and vision assets |
-| [Historical records](archive/README.md) | Earlier implementation reports and measurements |
+| [Project README](../README.md) | Demo, requirements, setup, features, and troubleshooting |
+| [Connect Obsidian](OBSIDIAN-BRAIN.md) | Connect a vault, build the graph, search locally, and protect private notes |
+| [User guide](USAGE.md) | Notes, answers, agent workflows, voice, and optional sensors |
+| [Ultra setup](../ULTRA-JARVIS.md) | Optional dependencies, model profiles, flags, tools, and recovery |
+| [Workflows](WORKFLOWS.md) | Launch, monitor, cancel, and recover tasks in Work |
+| [Local controls](LOCAL-CONTROLS.md) | macOS voice, exact decisions, previews, and local operations |
 
-The current verification record takes precedence over historical counts or acceptance claims. Private configuration, notes created during use, downloaded models and runtime traces do not belong in documentation or commits.
+## Development and data handling
 
-Focus is retired; older Focus evidence is historical.
+| Guide | Purpose |
+| --- | --- |
+| [Contributing](../CONTRIBUTING.md) | Development setup, checks, and safe bug reports |
+| [Verification](VERIFICATION.md) | Current review results and explicit acceptance limits |
+| [Architecture](ARCHITECTURE.md) | Request flow, module responsibilities, validation, and recovery |
+| [Included usage policy](usage-policy.md) | Signed-in Codex usage, backend restrictions, and allowance limits |
+| [Saved task privacy](TASK-PRIVACY.md) | Review/removal controls, duplicate prevention, and erasure limits |
+| [Third-party notices](../THIRD_PARTY.md) | Bundled libraries, fonts, and vision assets |
+
+<details>
+<summary>Engineering records and earlier evaluations</summary>
+
+These are dated design, implementation, and acceptance records. They are not the current feature list. Focus timers and activity tracking have been removed; their old measurements do not describe the shipped app.
+
+- [Galaxy agent visuals](agent-visuals.md)
+- [Voice and Island report](voice-island-report.md) and [feature catalog](voice-island-catalog.md)
+- [Framework evaluation](framework-evaluation.md)
+- [Remote execution investigation](remote-execution-recommendation.md)
+- [Execution upgrade results](upgrade-results.md), [checklist](upgrade-checklist.md), and [evidence](upgrade-evidence.md)
+- [Execution contracts](upgrade-contracts.md) and [evaluation protocol](upgrade-evaluation.md)
+- [Original Ultra verification](ultra-verification.md)
+- [Activation record](ACTIVATION-2026-10-28.md)
+- [Build plan](BUILD-PLAN.md)
+- [Historical records](archive/README.md)
+
+</details>
+
+Private configuration, captures, indexes, task journals, and downloaded models are intentionally not published. The repository's café notes are fictional.
