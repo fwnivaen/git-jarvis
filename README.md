@@ -1,5 +1,7 @@
 # Jarvis
 
+A project by [Nivaen Giritharan](https://github.com/fwnivaen).
+
 **Turn your Obsidian vault into an interactive 3D knowledge graph — then ask questions grounded in your notes.**
 
 Jarvis is a local Python app with a browser dashboard for connected Markdown notes, cited answers, and optional agent workflows. Open the same vault in Obsidian and Jarvis: your files remain ordinary Markdown, with no Obsidian plugin or account required.
